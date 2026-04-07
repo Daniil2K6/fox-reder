@@ -1,0 +1,33 @@
+# Node modules
+frontend/node_modules/
+backend/.venv/
+
+# Build outputs
+frontend/.next/
+frontend/out/
+
+# Database
+backend/fox_reader.db
+
+# Uploads and covers (optional, keep .gitkeep)
+backend/uploads/*
+backend/covers/*
+!backend/uploads/.gitkeep
+!backend/covers/.gitkeep
+
+# Logs
+*.log
+backend/backend.log
+frontend/frontend.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.temp
