@@ -243,25 +243,25 @@ export default function Home() {
                 >
                   Browse as Guest
                 </Link>
-               </>
-             )}
-             <button
-               onClick={handleOpenLocal}
-               style={{
-                 padding: "12px 28px",
-                 borderRadius: 10,
-                 border: "1px solid var(--border)",
-                 background: "transparent",
-                 color: "var(--text-primary)",
-                 textDecoration: "none",
-                 fontSize: 15,
-                 fontWeight: 500,
-                 cursor: "pointer",
-               }}
-             >
-               Open Local Book
-             </button>
-           </div>
+              </>
+            )}
+            <button
+              onClick={handleOpenLocal}
+              style={{
+                padding: "12px 28px",
+                borderRadius: 10,
+                border: "1px solid var(--border)",
+                background: "transparent",
+                color: "var(--text-primary)",
+                textDecoration: "none",
+                fontSize: 15,
+                fontWeight: 500,
+                cursor: "pointer",
+              }}
+            >
+              Open Local Book
+            </button>
+          </div>
 
           {/* Features */}
           <div
@@ -318,7 +318,7 @@ export default function Home() {
                   {f.desc}
                 </div>
               </div>
-            )            )}
+            ))}
           </div>
           <input
             ref={fileInputRef}
@@ -327,7 +327,6 @@ export default function Home() {
             style={{ display: "none" }}
             onChange={handleFileChange}
           />
-        </div>
         </div>
       </div>
     </div>
