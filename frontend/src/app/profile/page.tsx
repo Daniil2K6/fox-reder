@@ -77,7 +77,6 @@ export default function ProfilePage() {
   const [filter, setFilter] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const localFileInputRef = useRef<HTMLInputElement>(null);
-  const router = useRouter();
 
   const [activeTab, setActiveTab] = useState<"all" | "series">("all");
   const [seriesList, setSeriesList] = useState<Series[]>([]);

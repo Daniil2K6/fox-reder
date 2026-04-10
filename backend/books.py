@@ -158,14 +158,19 @@ async def upload_book(
 
 @router.get("/my", response_model=List[BookOut])
 def my_books(user: User = Depends(require_user), db: Session = Depends(get_db)):
-    books = db.query(Book).filter(Book.owner_id == user.id).order_by(Book.created_at.desc()).all()
+    # Admins see all books, regular users see only their own
+    if user.role == "admin":
+        books = db.query(Book).order_by(Book.created_at.desc()).all()
+    else:
+        books = db.query(Book).filter(Book.owner_id == user.id).order_by(Book.created_at.desc()).all()
     result = []
     for b in books:
         has_struct = os.path.exists(b.file_path + ".struct.json") if b.file_path else False
         comment_count = db.query(Comment).filter(Comment.book_id == b.id).count()
+        owner = db.query(User).filter(User.id == b.owner_id).first()
         result.append(BookOut(
             id=b.id, title=b.title, filename=b.filename, sha256=b.sha256,
-            is_public=b.is_public, owner_id=b.owner_id, owner_username=user.username,
+            is_public=b.is_public, owner_id=b.owner_id, owner_username=owner.username if owner else "Unknown",
             has_structure=has_struct, series_name=b.series_obj.name if b.series_obj else "",
             series_id=b.series_id,
             cover_image=b.cover_image,
@@ -284,7 +289,11 @@ def delete_book(
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    book = db.query(Book).filter(Book.id == book_id, Book.owner_id == user.id).first()
+    # Admins can delete any book, users can only delete their own
+    if user.role == "admin":
+        book = db.query(Book).filter(Book.id == book_id).first()
+    else:
+        book = db.query(Book).filter(Book.id == book_id, Book.owner_id == user.id).first()
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
     if os.path.exists(book.file_path):
@@ -428,7 +437,11 @@ def list_series(
     db: Session = Depends(get_db),
 ):
     from database import Series
-    series_list = db.query(Series).filter(Series.owner_id == user.id).order_by(Series.name).all()
+    # Admins see all series, regular users see only their own
+    if user.role == "admin":
+        series_list = db.query(Series).order_by(Series.name).all()
+    else:
+        series_list = db.query(Series).filter(Series.owner_id == user.id).order_by(Series.name).all()
     result = []
     for s in series_list:
         book_count = db.query(Book).filter(Book.series_id == s.id).count()
