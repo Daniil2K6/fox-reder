@@ -1,6 +1,8 @@
 "use client";
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter, useParams } from "next/navigation";
+import { TranslationDisplay } from "@/components/TranslationDisplay";
+import { useLanguage } from "@/lib/i18n";
 import {
   getUser,
   getTheme,
@@ -22,6 +24,7 @@ interface Book {
   is_public: boolean;
   owner_username: string;
   has_structure: boolean;
+  original_language?: string;
 }
 
 interface TocItem {
@@ -172,17 +175,23 @@ export default function ReaderPage() {
   const [currentPage, setCurrentPage] = useState(0);
   const [currentChapter, setCurrentChapter] = useState(0);
 
-  /* ── TTS state ── */
-  const [ttsState, setTtsState] = useState<"idle" | "loading" | "playing" | "paused">("idle");
-  const [language, setLanguage] = useState("ru");
-  const [voiceType, setVoiceType] = useState<"default" | "male" | "female" | "soft">("default");
-  const [highlightPara, setHighlightPara] = useState(-1);
-  const [showCharacterLabels, setShowCharacterLabels] = useState(false);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-   const ttsQueueRef = useRef<{ text: string; paraIdx: number; character?: string; voiceType: string }[]>([]);
-  const ttsActiveRef = useRef(false);
+   /* ── TTS state ── */
+   const [ttsState, setTtsState] = useState<"idle" | "loading" | "playing" | "paused">("idle");
+   const [language, setLanguage] = useState("ru");
+   const [voiceType, setVoiceType] = useState<"default" | "male" | "female" | "soft">("default");
+   const [highlightPara, setHighlightPara] = useState(-1);
+   const [showCharacterLabels, setShowCharacterLabels] = useState(false);
+   const audioRef = useRef<HTMLAudioElement | null>(null);
+    const ttsQueueRef = useRef<{ text: string; paraIdx: number; character?: string; voiceType: string }[]>([]);
+   const ttsActiveRef = useRef(false);
 
-  const contentRef = useRef<HTMLDivElement>(null);
+   /* ── translation state ── */
+   const { language: uiLanguage } = useLanguage();
+   const [showTranslations, setShowTranslations] = useState(false);
+   const [translationLanguage, setTranslationLanguage] = useState<string>(uiLanguage || "en");
+   const [translationLoadingCount, setTranslationLoadingCount] = useState(0);
+
+   const contentRef = useRef<HTMLDivElement>(null);
 
   /* ── derived ── */
 
@@ -639,11 +648,35 @@ export default function ReaderPage() {
                 ? "Продолжить"
                 : "Читать вслух"
             }
-          >
-            {ttsState === "loading" ? "⏳" : ttsState === "playing" ? "⏸" : "▶"}
-          </button>
+           >
+             {ttsState === "loading" ? "⏳" : ttsState === "playing" ? "⏸" : "▶"}
+           </button>
 
-          <div style={{ width: 1, height: 20, background: "var(--border)", margin: "0 4px" }} />
+           {/* Translation loading indicator */}
+           {showTranslations && translationLoadingCount > 0 && (
+             <div
+               style={{
+                 display: "inline-flex",
+                 alignItems: "center",
+                 gap: 6,
+                 padding: "5px 9px",
+                 borderRadius: 6,
+                 background: "var(--accent-light)",
+                 color: "var(--accent)",
+                 fontSize: 12,
+                 fontWeight: 500,
+                 marginLeft: 4,
+                 animation: "pulse 1.5s ease-in-out infinite",
+               }}
+               title={`Загружается ${translationLoadingCount} перевод${translationLoadingCount % 10 === 1 && translationLoadingCount !== 11 ? "а" : translationLoadingCount % 10 !== 1 ? "ов" : ""}`}
+             >
+               <span>🌐</span>
+               <span>{translationLoadingCount}</span>
+               <style>{`@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }`}</style>
+             </div>
+           )}
+
+           <div style={{ width: 1, height: 20, background: "var(--border)", margin: "0 4px" }} />
 
           {/* View mode buttons */}
           <button
@@ -919,36 +952,50 @@ export default function ReaderPage() {
                       </div>
                     )}
 
-                  <p
-                    onClick={() => {
-                      if (ttsState === "playing" || ttsState === "loading") { stopSpeaking(); return; }
-                      handleReadFromParagraph(idx);
-                    }}
-                    title="Нажмите чтобы начать чтение отсюда"
-                    style={{
-                      fontFamily: "Georgia, serif",
-                      fontSize: 17,
-                      lineHeight: 1.85,
-                      color: para.color || "var(--text-primary)",
-                      fontWeight: para.bold ? 700 : 400,
-                      fontStyle: para.italic ? "italic" : "normal",
-                      textIndent: (para.bold || para.character) ? 0 : "1.5em",
-                      margin: "0 0 0.6em",
-                      padding: "8px 12px",
-                      borderRadius: 6,
-                      background: highlightPara === idx ? "rgba(59,130,246,0.15)" : "transparent",
-                      borderLeft: highlightPara === idx ? "3px solid rgba(59,130,246,0.6)" : "3px solid transparent",
-                      cursor: "pointer",
-                      transition: "all 0.2s",
-                    }}
-                  >
-                    {showCharacterLabels && para.character && (
-                      <span style={{ fontWeight: 600, color: "var(--accent)", fontSize: "0.85em", marginRight: 6 }}>
-                        [{para.character}]
-                      </span>
-                    )}
-                    {para.text}
-                  </p>
+                   <div
+                     onClick={() => {
+                       if (ttsState === "playing" || ttsState === "loading") { stopSpeaking(); return; }
+                       handleReadFromParagraph(idx);
+                     }}
+                     title="Нажмите чтобы начать чтение отсюда"
+                     style={{
+                       fontFamily: "Georgia, serif",
+                       fontSize: 17,
+                       lineHeight: 1.85,
+                       color: para.color || "var(--text-primary)",
+                       fontWeight: para.bold ? 700 : 400,
+                       fontStyle: para.italic ? "italic" : "normal",
+                       textIndent: (para.bold || para.character) ? 0 : "1.5em",
+                       margin: "0 0 0.6em",
+                       padding: "8px 12px",
+                       borderRadius: 6,
+                       background: highlightPara === idx ? "rgba(59,130,246,0.15)" : "transparent",
+                       borderLeft: highlightPara === idx ? "3px solid rgba(59,130,246,0.6)" : "3px solid transparent",
+                       cursor: "pointer",
+                       transition: "all 0.2s",
+                     }}
+                   >
+                     {showCharacterLabels && para.character && (
+                       <span style={{ fontWeight: 600, color: "var(--accent)", fontSize: "0.85em", marginRight: 6 }}>
+                         [{para.character}]
+                       </span>
+                     )}
+                     {showTranslations && book?.original_language && book.original_language !== translationLanguage ? (
+                       <TranslationDisplay
+                         paragraphId={para.id}
+                         originalText={para.text}
+                         bookId={bookId}
+                         sourceLanguage={book.original_language}
+                         targetLanguage={translationLanguage}
+                         showTranslation={showTranslations}
+                         onTranslationStateChange={(isLoading) => {
+                           setTranslationLoadingCount((prev) => (isLoading ? prev + 1 : Math.max(0, prev - 1)));
+                         }}
+                       />
+                     ) : (
+                       para.text
+                     )}
+                   </div>
                 </div>
               ))
             )}
@@ -1249,6 +1296,60 @@ export default function ReaderPage() {
                 {showCharacterLabels ? "Скрыть метки" : "Показать метки"}
               </button>
             </div>
+
+            {/* translations */}
+            {book?.original_language && (
+              <div style={{ marginBottom: 20 }}>
+                <label style={{ display: "block", fontSize: 12, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 6 }}>
+                  Переводы
+                </label>
+                <button
+                  onClick={() => setShowTranslations(!showTranslations)}
+                  style={{
+                    width: "100%",
+                    padding: "7px 0",
+                    borderRadius: 8,
+                    border: "1px solid var(--border)",
+                    background: showTranslations ? "var(--accent)" : "var(--bg-secondary)",
+                    color: showTranslations ? "#fff" : "var(--text-primary)",
+                    fontSize: 12,
+                    cursor: "pointer",
+                    marginBottom: 8,
+                  }}
+                >
+                  {showTranslations ? "✓ Включены" : "Отключены"}
+                </button>
+                {showTranslations && (
+                  <select
+                    value={translationLanguage}
+                    onChange={(e) => setTranslationLanguage(e.target.value)}
+                    style={{
+                      width: "100%",
+                      padding: "6px 8px",
+                      borderRadius: 8,
+                      border: "1px solid var(--border)",
+                      background: "var(--bg-secondary)",
+                      color: "var(--text-primary)",
+                      fontSize: 12,
+                      fontFamily: "Georgia, serif",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <option value="en">English</option>
+                    <option value="ru">Русский</option>
+                    <option value="es">Español</option>
+                    <option value="fr">Français</option>
+                    <option value="de">Deutsch</option>
+                    <option value="ja">日本語</option>
+                  </select>
+                )}
+                {translationLoadingCount > 0 && showTranslations && (
+                  <p style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6, lineHeight: 1.4 }}>
+                    ⏳ Загружается {translationLoadingCount} перевод{translationLoadingCount % 10 === 1 && translationLoadingCount !== 11 ? "а" : translationLoadingCount % 10 !== 1 ? "ов" : ""}...
+                  </p>
+                )}
+              </div>
+            )}
 
             {/* TTS actions */}
             <div style={{ marginBottom: 20 }}>
