@@ -124,7 +124,7 @@ export default function BookPage({ params }: { params: { id: string } }) {
           )}
           <div style={{ marginTop: 16 }}>
             <h1 style={{ fontSize: 24, fontWeight: 700, color: "var(--text-primary)", marginBottom: 8 }}>{book?.title}</h1>
-            <p style={{ color: "var(--text-secondary)", marginBottom: 4 }}>File: {book?.filename}</p>
+            <p style={{ color: "var(--text-secondary)", marginBottom: 4 }}>Format: {book?.filename.split('.').pop()?.toLowerCase() ? '.' + book?.filename.split('.').pop()?.toLowerCase() : ''}</p>
             <p style={{ color: "var(--text-secondary)", marginBottom: 4 }}>Owner: {book?.owner_username}</p>
             <p style={{ color: "var(--text-secondary)", marginBottom: 4 }}>Access: {book?.is_public ? "Public" : "Private"}</p>
             <p style={{ color: "var(--text-secondary)", marginBottom: 8 }}>Chapters: {book?.has_structure ? "Yes" : "No"}</p>

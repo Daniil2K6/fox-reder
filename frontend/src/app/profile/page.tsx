@@ -3,6 +3,8 @@
 import { useEffect, useState, useRef, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useLanguage } from "@/lib/i18n";
+import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import {
   getUser, clearToken, clearUser, getTheme, setTheme,
   apiMyBooks, apiUploadBook, apiDeleteBook, apiToggleVisibility,
@@ -11,6 +13,8 @@ import {
   apiUploadCover, apiUpdateMetadata, apiGetComments, apiCreateComment, apiDeleteComment,
   apiPreviewBook,
 } from "@/lib/api";
+
+export const dynamic = "force-dynamic";
 
 interface Book {
   id: number;
@@ -21,8 +25,8 @@ interface Book {
   owner_id: number;
   owner_username: string;
   has_structure: boolean;
-  series_name: string;
-  series_id: number | null;
+  series_ids: number[];
+  series_names: string[];
   cover_image: string | null;
   genres: string | null;
   description: string | null;
@@ -68,6 +72,13 @@ const pill = (active: boolean): React.CSSProperties => ({
 
 export default function ProfilePage() {
   const router = useRouter();
+  let t = (key: string) => key; // fallback
+  try {
+    const lang = useLanguage();
+    t = lang.t;
+  } catch (e) {
+    // useLanguage failed, fallback to key
+  }
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -129,7 +140,7 @@ export default function ProfilePage() {
       try {
         const book = await apiUploadBook(files[i], false);
         if (activeTab === "series" && selectedSeries !== null) {
-          await apiAssignToSeries(book.id, selectedSeries);
+          await apiAssignToSeries(book.id, [selectedSeries]);
         }
         uploaded++;
       } catch (err: any) {
@@ -163,9 +174,9 @@ export default function ProfilePage() {
     }
   };
 
-  const handleAssignSeries = async (bookId: number, seriesId: number | null) => {
+  const handleAssignSeries = async (bookId: number, seriesIds: number[]) => {
     try {
-      await apiAssignToSeries(bookId, seriesId);
+      await apiAssignToSeries(bookId, seriesIds);
       await loadBooks();
       await loadSeries();
     } catch (err: any) {
@@ -274,14 +285,14 @@ export default function ProfilePage() {
   const displayBooks = useMemo(() => {
     let result = books;
     if (activeTab === "series" && selectedSeries !== null) {
-      result = result.filter((b) => b.series_id === selectedSeries);
+      result = result.filter((b) => b.series_ids.includes(selectedSeries));
     }
     if (filter) {
       const q = filter.toLowerCase();
       result = result.filter((b) =>
         b.title.toLowerCase().includes(q) ||
         b.filename.toLowerCase().includes(q) ||
-        (b.series_name && b.series_name.toLowerCase().includes(q))
+        (b.series_names && b.series_names.some(s => s.toLowerCase().includes(q)))
       );
     }
     result = [...result].sort((a, b) => {
@@ -309,18 +320,19 @@ export default function ProfilePage() {
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
           <Link href="/" style={{ fontSize: 20, fontWeight: 700, color: "var(--accent)", textDecoration: "none" }}>🦊 FoxBooks</Link>
           <span style={{ color: "var(--text-muted)" }}>/</span>
-          <span style={{ fontSize: 14, fontWeight: 500, color: "var(--text-primary)" }}>My Library</span>
+          <span style={{ fontSize: 14, fontWeight: 500, color: "var(--text-primary)" }}>{t('books.myBooks')}</span>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>{user?.username} ({user?.role})</span>
-          <Link href="/public" style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--text-secondary)", textDecoration: "none", fontSize: 13 }}>Public</Link>
+          <Link href="/public" style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--text-secondary)", textDecoration: "none", fontSize: 13 }}>{t('books.publicLibrary')}</Link>
+           <LanguageSwitcher />
            <button onClick={toggleTheme} style={{ width: 36, height: 36, borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-secondary)", cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>
              {theme === "light" ? "🌙" : "☀"}
            </button>
            <button onClick={handleOpenLocal} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--text-secondary)", fontSize: 13, cursor: "pointer" }}>
-             Open Local
+             {t('reader.localReader')}
            </button>
-           <button onClick={logout} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--text-secondary)", fontSize: 13, cursor: "pointer" }}>Logout</button>
+           <button onClick={logout} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--text-secondary)", fontSize: 13, cursor: "pointer" }}>{t('common.logout')}</button>
         </div>
       </nav>
 
@@ -433,8 +445,8 @@ export default function ProfilePage() {
               <option value="date-asc">По дате ↑</option>
               <option value="title-asc">По названию A-Z</option>
               <option value="title-desc">По названию Z-A</option>
-              <option value="filename-asc">По имени файла A-Z</option>
-              <option value="filename-desc">По имени файла Z-A</option>
+              <option value="filename-asc">По расширению A-Z</option>
+              <option value="filename-desc">По расширению Z-A</option>
             </select>
           </div>
         )}
@@ -474,29 +486,35 @@ export default function ProfilePage() {
                          </span>
                        )}
                      </Link>
-                    <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                      <span>{book.filename}</span>
-                      {book.series_name && (
-                        <span style={{ color: "var(--accent)", fontWeight: 500 }}>{book.series_name}</span>
-                      )}
-                    </div>
+                      <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span>{book.filename.split('.').pop()?.toLowerCase() ? '.' + book.filename.split('.').pop()?.toLowerCase() : ''}</span>
+                       {book.series_names.length > 0 && (
+                         <span style={{ color: "var(--accent)", fontWeight: 500 }}>{book.series_names.join(", ")}</span>
+                       )}
+                     </div>
                   </div>
-                  <div style={{ display: "flex", gap: 6, marginLeft: 16, alignItems: "center", flexWrap: "wrap" }}>
-                    {/* В серию */}
-                    <select
-                      value={book.series_id ?? ""}
-                      onChange={(e) => handleAssignSeries(book.id, e.target.value ? Number(e.target.value) : null)}
-                      style={{
-                        padding: "3px 6px", borderRadius: 6, border: "1px solid var(--border)",
-                        background: "var(--bg-secondary)", color: "var(--text-secondary)",
-                        fontSize: 11, cursor: "pointer", outline: "none",
-                      }}
-                    >
-                      <option value="">— без серии —</option>
-                      {seriesList.map((s) => (
-                        <option key={s.id} value={s.id}>{s.name}</option>
-                      ))}
-                    </select>
+                   <div style={{ display: "flex", gap: 6, marginLeft: 16, alignItems: "center", flexWrap: "wrap" }}>
+                     {/* В серию */}
+                     <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                       <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Серии:</label>
+                       <select
+                         multiple
+                         value={book.series_ids.map(String)}
+                         onChange={(e) => {
+                           const selected = Array.from(e.target.selectedOptions).map(opt => Number(opt.value));
+                           handleAssignSeries(book.id, selected);
+                         }}
+                         style={{
+                           padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)",
+                           background: "var(--bg-secondary)", color: "var(--text-secondary)",
+                           fontSize: 13, cursor: "pointer", outline: "none", minWidth: 140, minHeight: 36
+                         }}
+                       >
+                         {seriesList.map((s) => (
+                           <option key={s.id} value={s.id}>{s.name}</option>
+                         ))}
+                       </select>
+                     </div>
                     <button onClick={() => handleToggle(book.id, book.is_public)}
                       style={btn(book.is_public ? "rgba(34,197,94,0.1)" : "var(--bg-tertiary)", book.is_public ? "var(--success)" : "var(--text-muted)", { fontSize: 12 })}>
                       {book.is_public ? "Public" : "Private"}

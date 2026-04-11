@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 
 from database import Series, Book, User, Comment, get_db
 from auth import require_user, get_current_user
-from vb_parser import parse_vb, parse_fb2, extract_plain_text
+from vb_parser import parse_vb, parse_fb2, extract_plain_text, extract_text
+from translation_service import get_translation_service
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -31,8 +32,8 @@ class BookOut(BaseModel):
     owner_id: int
     owner_username: str = ""
     has_structure: bool = False
-    series_name: str = ""
-    series_id: Optional[int] = None
+    series_ids: List[int] = []
+    series_names: List[str] = []
     cover_image: Optional[str] = None
     genres: Optional[str] = None
     description: Optional[str] = None
@@ -55,6 +56,23 @@ class CommentOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class TranslateParagraphRequest(BaseModel):
+    paragraph_id: str
+    original_text: str
+    source_language: str
+    target_language: str
+    force_refresh: bool = False
+
+
+class TranslateMetadataRequest(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    genres: Optional[str] = None
+    source_language: str
+    target_language: str
+    force_refresh: bool = False
 
 
 def extract_text(file_path: str, filename: str) -> tuple[str, Optional[str]]:
@@ -151,8 +169,8 @@ async def upload_book(
         owner_id=book.owner_id,
         owner_username=user.username,
         has_structure=structured_content is not None,
-        series_name=book.series_obj.name if book.series_obj else "",
-        series_id=book.series_id,
+        series_ids=[s.id for s in book.series_list],
+        series_names=[s.name for s in book.series_list],
     )
 
 
@@ -171,8 +189,9 @@ def my_books(user: User = Depends(require_user), db: Session = Depends(get_db)):
         result.append(BookOut(
             id=b.id, title=b.title, filename=b.filename, sha256=b.sha256,
             is_public=b.is_public, owner_id=b.owner_id, owner_username=owner.username if owner else "Unknown",
-            has_structure=has_struct, series_name=b.series_obj.name if b.series_obj else "",
-            series_id=b.series_id,
+            has_structure=has_struct, 
+            series_ids=[s.id for s in b.series_list],
+            series_names=[s.name for s in b.series_list],
             cover_image=b.cover_image,
             genres=b.genres,
             description=b.description,
@@ -196,13 +215,71 @@ def public_books(
             id=b.id, title=b.title, filename=b.filename, sha256=b.sha256,
             is_public=b.is_public, owner_id=b.owner_id,
             owner_username=owner.username if owner else "unknown",
-            has_structure=has_struct, series_name=b.series_obj.name if b.series_obj else "",
-            series_id=b.series_id,
+            has_structure=has_struct, 
+            series_ids=[s.id for s in b.series_list],
+            series_names=[s.name for s in b.series_list],
             cover_image=b.cover_image,
             genres=b.genres,
             description=b.description,
             comment_count=comment_count,
         ))
+    return result
+
+
+@router.get("/search")
+def search_books(
+    q: str = Query("", min_length=1),
+    db: Session = Depends(get_db),
+    user: Optional[User] = Depends(get_current_user),
+):
+    """
+    Search books by title, description, genres, and translations.
+    For public books only (or user's own books if authenticated).
+    """
+    if not q:
+        return []
+
+    result = []
+    
+    # Simple substring search (works across databases)
+    books = db.query(Book).filter(Book.is_public == True).all()
+    
+    for b in books:
+        match = False
+        search_lower = q.lower()
+        
+        # Check original fields
+        if (b.title and search_lower in b.title.lower() or
+            b.description and search_lower in b.description.lower() or
+            b.genres and search_lower in b.genres.lower()):
+            match = True
+        
+        # Check translated metadata
+        if not match:
+            for meta_trans in b.metadata_translations:
+                if ((meta_trans.title and search_lower in meta_trans.title.lower()) or
+                    (meta_trans.description and search_lower in meta_trans.description.lower()) or
+                    (meta_trans.genres and search_lower in meta_trans.genres.lower())):
+                    match = True
+                    break
+        
+        if match:
+            owner = db.query(User).filter(User.id == b.owner_id).first()
+            has_struct = os.path.exists(b.file_path + ".struct.json") if b.file_path else False
+            comment_count = db.query(Comment).filter(Comment.book_id == b.id).count()
+            result.append(BookOut(
+                id=b.id, title=b.title, filename=b.filename, sha256=b.sha256,
+                is_public=b.is_public, owner_id=b.owner_id,
+                owner_username=owner.username if owner else "unknown",
+                has_structure=has_struct, 
+                series_ids=[s.id for s in b.series_list],
+                series_names=[s.name for s in b.series_list],
+                cover_image=b.cover_image,
+                genres=b.genres,
+                description=b.description,
+                comment_count=comment_count,
+            ))
+    
     return result
 
 
@@ -224,8 +301,9 @@ def get_book(
         id=book.id, title=book.title, filename=book.filename, sha256=book.sha256,
         is_public=book.is_public, owner_id=book.owner_id,
         owner_username=owner.username if owner else "unknown",
-        has_structure=has_struct, series_name=book.series_obj.name if book.series_obj else "",
-        series_id=book.series_id,
+        has_structure=has_struct, 
+        series_ids=[s.id for s in book.series_list],
+        series_names=[s.name for s in book.series_list],
         cover_image=book.cover_image,
         genres=book.genres,
         description=book.description,
@@ -418,7 +496,6 @@ def create_series(
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    from database import Series
     name = payload.get("name", "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Series name required")
@@ -436,7 +513,6 @@ def list_series(
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    from database import Series
     # Admins see all series, regular users see only their own
     if user.role == "admin":
         series_list = db.query(Series).order_by(Series.name).all()
@@ -444,7 +520,7 @@ def list_series(
         series_list = db.query(Series).filter(Series.owner_id == user.id).order_by(Series.name).all()
     result = []
     for s in series_list:
-        book_count = db.query(Book).filter(Book.series_id == s.id).count()
+        book_count = len(s.books)
         result.append({"id": s.id, "name": s.name, "book_count": book_count})
     return result
 
@@ -454,12 +530,9 @@ def delete_series(
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    from database import Series
     s = db.query(Series).filter(Series.id == series_id, Series.owner_id == user.id).first()
     if not s:
         raise HTTPException(status_code=404, detail="Series not found")
-    # Unassign books from this series
-    db.query(Book).filter(Book.series_id == series_id).update({"series_id": None})
     db.delete(s)
     db.commit()
     return {"detail": "Series deleted"}
@@ -474,14 +547,23 @@ def assign_to_series(
     book = db.query(Book).filter(Book.id == book_id, Book.owner_id == user.id).first()
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
-    series_id = payload.get("series_id")
-    if series_id:
+    
+    # Get series_ids array (allow both single ID and multiple)
+    series_ids = payload.get("series_ids", [])
+    if isinstance(series_ids, int):
+        series_ids = [series_ids]
+    
+    # Clear existing series
+    book.series_list.clear()
+    
+    # Add new series
+    for series_id in series_ids:
         s = db.query(Series).filter(Series.id == series_id, Series.owner_id == user.id).first()
-        if not s:
-            raise HTTPException(status_code=404, detail="Series not found")
-    book.series_id = series_id
+        if s:
+            book.series_list.append(s)
+    
     db.commit()
-    return {"id": book.id, "series_id": book.series_id}
+    return {"id": book.id, "series_ids": [s.id for s in book.series_list]}
 
 
 @router.post("/preview")
@@ -586,6 +668,65 @@ def update_metadata(
         book.description = payload.description
     db.commit()
     return {"id": book.id, "genres": book.genres, "description": book.description}
+
+
+@router.post("/{book_id}/translate/paragraph")
+async def translate_paragraph(
+    book_id: int,
+    payload: TranslateParagraphRequest,
+    user: Optional[User] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    if book.owner_id != (user.id if user else -1) and not book.is_public:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    service = get_translation_service()
+    try:
+        translated = await service.translate_paragraph(
+            db,
+            book_id,
+            payload.paragraph_id,
+            payload.original_text,
+            payload.source_language,
+            payload.target_language,
+            payload.force_refresh
+        )
+        return {"translated_text": translated}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Translation failed: {str(e)}")
+
+
+@router.post("/{book_id}/translate/metadata")
+async def translate_metadata(
+    book_id: int,
+    payload: TranslateMetadataRequest,
+    user: Optional[User] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    if book.owner_id != (user.id if user else -1) and not book.is_public:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    service = get_translation_service()
+    try:
+        translated = await service.translate_metadata(
+            db,
+            book_id,
+            payload.title,
+            payload.description,
+            payload.genres,
+            payload.source_language,
+            payload.target_language,
+            payload.force_refresh
+        )
+        return translated
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Metadata translation failed: {str(e)}")
 
 
 @router.get("/{book_id}/comments", response_model=List[CommentOut])

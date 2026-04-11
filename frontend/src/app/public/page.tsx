@@ -274,7 +274,7 @@ export default function PublicLibraryPage() {
                     )}
                   </Link>
                   <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
-                    by {book.owner_username} · {book.filename}
+                    by {book.owner_username} · {book.filename.split('.').pop()?.toLowerCase() ? '.' + book.filename.split('.').pop()?.toLowerCase() : ''}
                   </p>
                 </div>
                 <Link

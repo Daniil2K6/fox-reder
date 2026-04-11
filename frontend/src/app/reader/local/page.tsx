@@ -1316,7 +1316,7 @@ export default function LocalReaderPage() {
                 <div>
                   <strong>{book.title}</strong>
                 </div>
-                <div>Файл: {book.filename}</div>
+                <div>Формат: {book.filename.split('.').pop()?.toLowerCase() ? '.' + book.filename.split('.').pop()?.toLowerCase() : ''}</div>
                 <div>Автор: {book.owner_username}</div>
                 <div>Глав: {chapters.length}</div>
                 <div>Абзацев: {visibleParagraphs.length}</div>

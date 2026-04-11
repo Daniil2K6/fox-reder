@@ -224,9 +224,58 @@ def parse_vb(file_path: str) -> dict:
 
 
 def extract_plain_text(chapters: list) -> str:
-    parts = []
-    for ch in chapters:
-        parts.append(ch["title"])
-        for p in ch["paragraphs"]:
-            parts.append(p["text"])
-    return "\n".join(parts)
+     parts = []
+     for ch in chapters:
+         parts.append(ch["title"])
+         for p in ch["paragraphs"]:
+             parts.append(p["text"])
+     return "\n".join(parts)
+
+
+def extract_text(file_path: str, filename: str) -> tuple[str, Optional[str]]:
+    """
+    Extract text and structured content from a book file.
+    Returns (plain_text_content, structured_json_string)
+    """
+    ext = os.path.splitext(filename)[1].lower()
+    
+    try:
+        if ext == ".fb2":
+            structured = parse_fb2(file_path)
+        elif ext in (".vb", ".vblite"):
+            structured = parse_vb(file_path)
+        elif ext == ".txt":
+            with open(file_path, "r", encoding="utf-8") as f:
+                text_content = f.read()
+            return text_content, None  # Plain text files don't have structure
+        elif ext == ".epub":
+            # For EPUB, we'll try to parse as text
+            try:
+                import zipfile
+                text_parts = []
+                with zipfile.ZipFile(file_path, "r") as z:
+                    for name in z.namelist():
+                        if name.endswith(".xhtml") or name.endswith(".html"):
+                            try:
+                                content = z.read(name).decode("utf-8", errors="ignore")
+                                # Simple HTML text extraction
+                                import re
+                                text = re.sub("<[^>]+>", "\n", content)
+                                text_parts.append(text)
+                            except:
+                                pass
+                text_content = "\n".join(text_parts)
+                return text_content, None
+            except:
+                return "", None
+        else:
+            return "", None
+        
+        # For FB2 and VB/VBLite with structure
+        plain_text = extract_plain_text(structured.get("chapters", []))
+        structured_json = json.dumps(structured, ensure_ascii=False)
+        return plain_text, structured_json
+        
+    except Exception as e:
+        logger.error(f"Error extracting text from {filename}: {e}")
+        return "", None

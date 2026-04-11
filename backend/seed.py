@@ -136,6 +136,28 @@ def seed_books():
             db.rollback()
             print(f"Commit failed: {e}")
         
+        # Create sample series
+        try:
+            from database import Series
+            series1 = db.query(Series).filter(Series.name == "Покоривший СТЕНУ", Series.owner_id == admin.id).first()
+            if not series1:
+                series1 = Series(name="Покоривший СТЕНУ", owner_id=admin.id)
+                db.add(series1)
+                db.commit()
+                db.refresh(series1)
+                print(f"Created series: {series1.name}")
+                
+                # Assign books to series
+                books = db.query(Book).all()
+                for book in books:
+                    if "Покоривший" in book.title or "СТЕНУ" in book.title:
+                        book.series_list.append(series1)
+                db.commit()
+                print(f"Assigned {len([b for b in books if 'Покоривший' in b.title or 'СТЕНУ' in b.title])} books to series")
+        except Exception as e:
+            db.rollback()
+            print(f"Series creation failed: {e}")
+        
         # Add some sample comments
         books = db.query(Book).all()
         if books:

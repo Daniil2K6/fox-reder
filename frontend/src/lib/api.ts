@@ -126,6 +126,11 @@ export async function apiPublicBooks() {
   return res.json();
 }
 
+export async function apiSearchBooks(query: string) {
+  const res = await request(`/api/books/search?q=${encodeURIComponent(query)}`);
+  return res.json();
+}
+
 export async function apiGetBook(id: number) {
   const res = await request(`/api/books/${id}`);
   return res.json();
@@ -207,10 +212,10 @@ export async function apiDeleteSeries(seriesId: number) {
   return res.json();
 }
 
-export async function apiAssignToSeries(bookId: number, seriesId: number | null) {
+export async function apiAssignToSeries(bookId: number, seriesIds: number[]) {
   const res = await request(`/api/books/${bookId}/series`, {
     method: "PUT",
-    body: JSON.stringify({ series_id: seriesId }),
+    body: JSON.stringify({ series_ids: seriesIds }),
   });
   return res.json();
 }
@@ -274,4 +279,48 @@ export async function apiTTSChunkWithCharacter(text: string, language: string = 
     body: JSON.stringify(body),
   });
   return res.blob();
+}
+
+export async function apiTranslateParagraph(
+  bookId: number,
+  paragraphId: string,
+  originalText: string,
+  sourceLanguage: string,
+  targetLanguage: string,
+  forceRefresh: boolean = false
+): Promise<{ translated_text: string }> {
+  const res = await request(`/api/books/${bookId}/translate/paragraph`, {
+    method: "POST",
+    body: JSON.stringify({
+      paragraph_id: paragraphId,
+      original_text: originalText,
+      source_language: sourceLanguage,
+      target_language: targetLanguage,
+      force_refresh: forceRefresh,
+    }),
+  });
+  return res.json();
+}
+
+export async function apiTranslateMetadata(
+  bookId: number,
+  title: string | null,
+  description: string | null,
+  genres: string | null,
+  sourceLanguage: string,
+  targetLanguage: string,
+  forceRefresh: boolean = false
+): Promise<{ title: string | null; description: string | null; genres: string | null }> {
+  const res = await request(`/api/books/${bookId}/translate/metadata`, {
+    method: "POST",
+    body: JSON.stringify({
+      title,
+      description,
+      genres,
+      source_language: sourceLanguage,
+      target_language: targetLanguage,
+      force_refresh: forceRefresh,
+    }),
+  });
+  return res.json();
 }

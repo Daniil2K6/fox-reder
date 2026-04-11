@@ -133,3 +133,20 @@ def set_voice_preference(
     user.preferred_language = language
     db.commit()
     return {"voice": voice, "language": language}
+
+
+class UpdateLanguageRequest(BaseModel):
+    language: str
+
+
+@router.post("/update-language")
+def update_language(
+    payload: UpdateLanguageRequest,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    if payload.language not in ["ru", "en"]:
+        raise HTTPException(status_code=400, detail="Invalid language")
+    user.preferred_language = payload.language
+    db.commit()
+    return {"language": user.preferred_language}
