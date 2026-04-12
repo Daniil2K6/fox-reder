@@ -27,7 +27,7 @@ export default function RegisterPage() {
     setLoading(true);
     try {
       await apiRegister(username, password);
-      router.push("/library");
+      router.push("/profile");
     } catch (err: any) {
       setError(err.message);
     } finally {
