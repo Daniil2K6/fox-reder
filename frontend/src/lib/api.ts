@@ -110,10 +110,17 @@ export async function apiGetMe() {
   return res.json();
 }
 
-export async function apiUploadBook(file: File, isPublic: boolean = false) {
+export async function apiUploadBook(file: File, seriesName?: string, title?: string, genres?: string, description?: string) {
   const form = new FormData();
   form.append("file", file);
-  const res = await request(`/api/books/upload?is_public=${isPublic}`, {
+  let url = "/api/books/upload";
+  const params = [];
+  if (seriesName) params.push(`series_name=${encodeURIComponent(seriesName)}`);
+  if (title) params.push(`title=${encodeURIComponent(title)}`);
+  if (genres) params.push(`genres=${encodeURIComponent(genres)}`);
+  if (description) params.push(`description=${encodeURIComponent(description)}`);
+  if (params.length > 0) url += "?" + params.join("&");
+  const res = await request(url, {
     method: "POST",
     body: form,
   });
@@ -218,6 +225,11 @@ export async function apiCreateSeries(name: string) {
 
 export async function apiListSeries() {
   const res = await request("/api/books/series/list");
+  return res.json();
+}
+
+export async function apiPublicSeries() {
+  const res = await request("/api/books/series/public");
   return res.json();
 }
 

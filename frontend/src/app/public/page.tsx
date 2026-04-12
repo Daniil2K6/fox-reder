@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { getUser, clearToken, clearUser, getTheme, setTheme, apiPublicBooks } from "@/lib/api";
+import { getUser, clearToken, clearUser, getTheme, setTheme, apiPublicBooks, apiPublicSeries, apiGetCoverUrl } from "@/lib/api";
 import { useRouter } from "next/navigation";
 
 interface Book {
@@ -21,10 +21,12 @@ interface Book {
 
 export default function PublicLibraryPage() {
   const [books, setBooks] = useState<Book[]>([]);
+  const [series, setSeries] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [user, setUserState] = useState<any>(null);
   const [theme, setThemeState] = useState("light");
+  const [activeTab, setActiveTab] = useState<"books" | "series">("books");
   const router = useRouter();
 
   useEffect(() => {
@@ -32,19 +34,29 @@ export default function PublicLibraryPage() {
     const t = getTheme();
     setThemeState(t);
     document.documentElement.setAttribute("data-theme", t);
-    loadBooks();
+    loadData();
   }, []);
 
-  const loadBooks = async () => {
+  const loadData = async () => {
     try {
-      const data = await apiPublicBooks();
-      setBooks(data);
+      const [booksData, seriesData] = await Promise.all([
+        apiPublicBooks(),
+        activeTab === "series" ? apiPublicSeries() : Promise.resolve([])
+      ]);
+      setBooks(booksData);
+      setSeries(seriesData);
     } catch (err: any) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (activeTab === "series") {
+      apiPublicSeries().then(setSeries).catch(() => {});
+    }
+  }, [activeTab]);
 
   const logout = () => {
     clearToken();
@@ -196,6 +208,40 @@ export default function PublicLibraryPage() {
       </nav>
 
       <div style={{ maxWidth: 900, margin: "0 auto", padding: "32px 24px" }}>
+        {/* Tabs */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
+          <button
+            onClick={() => setActiveTab("books")}
+            style={{
+              padding: "8px 16px",
+              borderRadius: 8,
+              border: "none",
+              background: activeTab === "books" ? "var(--accent)" : "var(--bg-secondary)",
+              color: activeTab === "books" ? "#fff" : "var(--text-secondary)",
+              fontSize: 14,
+              fontWeight: 500,
+              cursor: "pointer",
+            }}
+          >
+            Книги
+          </button>
+          <button
+            onClick={() => setActiveTab("series")}
+            style={{
+              padding: "8px 16px",
+              borderRadius: 8,
+              border: "none",
+              background: activeTab === "series" ? "var(--accent)" : "var(--bg-secondary)",
+              color: activeTab === "series" ? "#fff" : "var(--text-secondary)",
+              fontSize: 14,
+              fontWeight: 500,
+              cursor: "pointer",
+            }}
+          >
+            Серии
+          </button>
+        </div>
+
         {error && (
           <div
             style={{
@@ -212,7 +258,7 @@ export default function PublicLibraryPage() {
           </div>
         )}
 
-        {books.length === 0 ? (
+        {activeTab === "books" && books.length === 0 ? (
           <div
             style={{
               textAlign: "center",
@@ -221,14 +267,44 @@ export default function PublicLibraryPage() {
             }}
           >
             <div style={{ fontSize: 48, marginBottom: 12 }}>📚</div>
-            <p style={{ fontSize: 16 }}>No public books yet</p>
-            <p style={{ fontSize: 14 }}>Be the first to share a book!</p>
+            <p style={{ fontSize: 16 }}>Пока нет книг</p>
+            <p style={{ fontSize: 14 }}>Будьте первым, кто загрузит книгу!</p>
           </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        ) : activeTab === "books" ? (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 20 }}>
             {books.map((book) => (
+              <Link key={book.id} href={`/book/${book.id}`} style={{ textDecoration: "none" }}>
+                <div style={{ borderRadius: 12, overflow: "hidden", border: "1px solid var(--border)", background: "var(--bg-secondary)", transition: "transform 0.15s, box-shadow 0.15s", cursor: "pointer" }}
+                  onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-4px)"; e.currentTarget.style.boxShadow = "0 8px 20px rgba(0,0,0,0.12)"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "none"; }}
+                >
+                  <div style={{ aspectRatio: "2/3", background: "var(--bg-tertiary)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {book.cover_image ? (
+                      <img src={apiGetCoverUrl(book.id)} alt={book.title} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    ) : (
+                      <span style={{ fontSize: 40 }}>📖</span>
+                    )}
+                  </div>
+                  <div style={{ padding: "10px 12px" }}>
+                    <p style={{ fontSize: 13, fontWeight: 500, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{book.title}</p>
+                    {book.has_structure && (
+                      <span style={{ fontSize: 9, padding: "2px 5px", borderRadius: 3, background: "var(--accent-light)", color: "var(--accent)", fontWeight: 600 }}>VOXBOOK</span>
+                    )}
+                  </div>
+                </div>
+              </Link>
+            ))}
+          </div>
+        ) : activeTab === "series" && series.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "60px 0", color: "var(--text-muted)" }}>
+            <div style={{ fontSize: 48, marginBottom: 12 }}>📂</div>
+            <p style={{ fontSize: 16 }}>Пока нет серий</p>
+          </div>
+        ) : activeTab === "series" ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {series.map((s) => (
               <div
-                key={book.id}
+                key={s.id}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -237,65 +313,16 @@ export default function PublicLibraryPage() {
                   borderRadius: 12,
                   border: "1px solid var(--border)",
                   background: "var(--bg-secondary)",
-                  transition: "border-color 0.15s",
                 }}
-                onMouseEnter={(e) =>
-                  (e.currentTarget.style.borderColor = "var(--accent)")
-                }
-                onMouseLeave={(e) =>
-                  (e.currentTarget.style.borderColor = "var(--border)")
-                }
               >
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <Link
-                    href={`/book/${book.id}`}
-                    style={{
-                      fontWeight: 500,
-                      color: "var(--text-primary)",
-                      textDecoration: "none",
-                      fontSize: 15,
-                    }}
-                  >
-                    {book.title}
-                    {book.has_structure && (
-                      <span
-                        style={{
-                          marginLeft: 8,
-                          fontSize: 10,
-                          padding: "1px 6px",
-                          borderRadius: 4,
-                          background: "var(--accent-light)",
-                          color: "var(--accent)",
-                          fontWeight: 600,
-                        }}
-                      >
-                        VOXBOOK
-                      </span>
-                    )}
-                  </Link>
-                  <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
-                    by {book.owner_username} · {book.filename.split('.').pop()?.toLowerCase() ? '.' + book.filename.split('.').pop()?.toLowerCase() : ''}
-                  </p>
+                <div>
+                  <span style={{ fontWeight: 500, color: "var(--text-primary)", fontSize: 15 }}>{s.name}</span>
+                  <span style={{ marginLeft: 8, fontSize: 12, color: "var(--text-muted)" }}>{s.book_count} книг</span>
                 </div>
-                <Link
-                  href={`/book/${book.id}`}
-                  style={{
-                    padding: "6px 16px",
-                    borderRadius: 8,
-                    background: "var(--accent-light)",
-                    color: "var(--accent)",
-                    textDecoration: "none",
-                    fontSize: 13,
-                    fontWeight: 500,
-                    marginLeft: 16,
-                  }}
-                >
-                  Read
-                </Link>
               </div>
             ))}
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   );

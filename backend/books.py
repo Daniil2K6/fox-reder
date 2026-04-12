@@ -5,7 +5,9 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from database import Series, Book, User, Comment, get_db
@@ -93,7 +95,10 @@ def extract_text(file_path: str, filename: str) -> tuple[str, Optional[str]]:
 @router.post("/upload", response_model=BookOut)
 async def upload_book(
     file: UploadFile = File(...),
-    is_public: bool = Query(False),
+    series_name: Optional[str] = Query(None),
+    title: Optional[str] = Query(None),
+    genres: Optional[str] = Query(None),
+    description: Optional[str] = Query(None),
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ):
@@ -117,24 +122,40 @@ async def upload_book(
     user_dir = os.path.join(UPLOAD_DIR, str(user.id))
     os.makedirs(user_dir, exist_ok=True)
     safe_name = f"{sha256[:16]}_{file.filename}"
+
     file_path = os.path.join(user_dir, safe_name)
 
     with open(file_path, "wb") as f:
         f.write(content)
 
-    title = os.path.splitext(file.filename)[0]
+    book_title = title.strip() if title else os.path.splitext(file.filename)[0]
     text_content, structured_content = extract_text(file_path, file.filename)
 
     book = Book(
-        title=title,
+        title=book_title,
         filename=file.filename,
         sha256=sha256,
         file_path=file_path,
-        is_public=is_public,
+        is_public=True,
         owner_id=user.id,
         text_content=text_content,
+        genres=genres if genres else None,
+        description=description if description else None,
     )
     db.add(book)
+    
+    if series_name:
+        series_name = series_name.strip()
+        if series_name:
+            existing_series = db.query(Series).filter(func.lower(Series.name) == series_name.lower()).first()
+            if existing_series:
+                book.series_list.append(existing_series)
+            else:
+                new_series = Series(name=series_name)
+                db.add(new_series)
+                db.flush()
+                book.series_list.append(new_series)
+    
     db.commit()
     db.refresh(book)
 
@@ -468,10 +489,16 @@ def create_series(
 ):
     name = payload.get("name", "").strip()
     if not name:
-        raise HTTPException(status_code=400, detail="Series name required")
-    existing = db.query(Series).filter(Series.owner_id == user.id, Series.name == name).first()
+        raise HTTPException(status_code=400, detail="Название серии обязательно")
+    
+    import re
+    if re.search(r'[.,;:!?"\'()\[\]{}~`@#$%^&*+=<>]', name):
+        raise HTTPException(status_code=400, detail="Название серии не должно содержать спецсимволы (,.;:!?\"'()[]{}~`@#$%^&*+=<>)")
+    
+    existing = db.query(Series).filter(func.lower(Series.name) == name.lower()).first()
     if existing:
-        raise HTTPException(status_code=409, detail="Series already exists")
+        raise HTTPException(status_code=409, detail="Серия уже существует")
+    
     s = Series(name=name, owner_id=user.id)
     db.add(s)
     db.commit()
@@ -492,6 +519,20 @@ def list_series(
     for s in series_list:
         book_count = len(s.books)
         result.append({"id": s.id, "name": s.name, "book_count": book_count})
+    return result
+
+
+@router.get("/series/public")
+def list_public_series(db: Session = Depends(get_db)):
+    series_list = db.query(Series).order_by(func.lower(Series.name)).all()
+    result = []
+    seen_lower = set()
+    for s in series_list:
+        lower_name = s.name.lower()
+        if lower_name in seen_lower:
+            continue
+        seen_lower.add(lower_name)
+        result.append({"id": s.id, "name": s.name, "book_count": len(s.books)})
     return result
 
 @router.delete("/series/{series_id}")

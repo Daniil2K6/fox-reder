@@ -8,8 +8,132 @@ import {
   apiMyBooks, apiUploadBook, apiDeleteBook, apiToggleVisibility,
   apiGetBookStructured, apiUpdateChapter, apiDownloadVblite,
   apiCreateSeries, apiListSeries, apiDeleteSeries, apiAssignToSeries,
-  apiPreviewBook, apiGetMe,
+  apiPreviewBook, apiGetMe, apiUploadCover,
 } from "@/lib/api";
+import { GENRES, getGenresByLetter, searchGenres } from "@/lib/genres";
+
+const ITEMS_PER_PAGE = 30;
+const RUSSIAN_ALPHABET = "АБВГДЕЁЖЗИКЛМНОПРСТУФХЦЧШЩЭЮЯ".split("");
+const ENGLISH_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+
+function GenreModal({ selectedGenres, onSave, onClose }: { selectedGenres: string[]; onSave: (g: string[]) => void; onClose: () => void }) {
+  const [search, setSearch] = useState("");
+  const [activeLetter, setActiveLetter] = useState("А");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [selected, setSelected] = useState<Set<string>>(new Set(selectedGenres));
+  const [showPageInput, setShowPageInput] = useState(false);
+  const [pageInput, setPageInput] = useState("");
+
+  const filteredGenres = search ? searchGenres(search) : getGenresByLetter(activeLetter);
+  const totalPages = Math.max(1, Math.ceil(filteredGenres.length / ITEMS_PER_PAGE));
+  const pagedGenres = filteredGenres.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
+
+  const toggleGenre = (g: string) => {
+    const next = new Set(selected);
+    if (next.has(g)) next.delete(g);
+    else next.add(g);
+    setSelected(next);
+  };
+
+  const goToPage = (p: number) => {
+    if (p >= 1 && p <= totalPages) setCurrentPage(p);
+  };
+
+  const handlePageInput = () => {
+    const p = parseInt(pageInput, 10);
+    if (!isNaN(p)) goToPage(p);
+    setShowPageInput(false);
+    setPageInput("");
+  };
+
+  const getPageNumbers = () => {
+    const pages: (number | string)[] = [];
+    const maxVisible = 7;
+    if (totalPages <= maxVisible + 2) {
+      for (let i = 1; i <= totalPages; i++) pages.push(i);
+    } else {
+      pages.push(1);
+      if (currentPage > 3) pages.push("...");
+      for (let i = Math.max(2, currentPage - 1); i <= Math.min(totalPages - 1, currentPage + 1); i++) pages.push(i);
+      if (currentPage < totalPages - 2) pages.push("...");
+      pages.push(totalPages);
+    }
+    return pages;
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000 }}>
+      <div style={{ background: "var(--bg-secondary)", borderRadius: 12, width: "95%", maxWidth: 800, maxHeight: "85vh", display: "flex", flexDirection: "column", padding: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <h2 style={{ fontSize: 20, fontWeight: 600 }}>Выбор жанров</h2>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "var(--text-muted)" }}>✕</button>
+        </div>
+
+        <input
+          value={search}
+          onChange={(e) => { setSearch(e.target.value); setCurrentPage(1); }}
+          placeholder="Поиск по названию..."
+          style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: 14, marginBottom: 12, boxSizing: "border-box" }}
+        />
+
+        {!search && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
+            {RUSSIAN_ALPHABET.map(l => (
+              <button key={l} onClick={() => { setActiveLetter(l); setCurrentPage(1); }}
+                style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid var(--border)", background: activeLetter === l ? "var(--accent)" : "var(--bg-primary)", color: activeLetter === l ? "#fff" : "var(--text-primary)", fontSize: 12, cursor: "pointer" }}>
+                {l}
+              </button>
+            ))}
+            <button onClick={() => { setActiveLetter("ABC"); setCurrentPage(1); }}
+              style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid var(--border)", background: activeLetter === "ABC" ? "var(--accent)" : "var(--bg-primary)", color: activeLetter === "ABC" ? "#fff" : "var(--text-primary)", fontSize: 12, cursor: "pointer" }}>
+              ABC
+            </button>
+          </div>
+        )}
+
+        <div style={{ flex: 1, overflow: "auto", border: "1px solid var(--border)", borderRadius: 8, marginBottom: 12, padding: 8 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {pagedGenres.map(g => (
+              <button key={g} onClick={() => toggleGenre(g)}
+                style={{ padding: "6px 12px", borderRadius: 16, border: "1px solid var(--border)", background: selected.has(g) ? "var(--accent)" : "var(--bg-primary)", color: selected.has(g) ? "#fff" : "var(--text-primary)", fontSize: 13, cursor: "pointer" }}>
+                {g}
+              </button>
+            ))}
+          </div>
+          {pagedGenres.length === 0 && <p style={{ color: "var(--text-muted)", textAlign: "center", padding: 20 }}>Нет жанров</p>}
+        </div>
+
+        {totalPages > 1 && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 12 }}>
+            <button onClick={() => goToPage(1)} disabled={currentPage === 1} style={{ padding: "4px 8px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--bg-primary)", cursor: "pointer", fontSize: 12 }}>««</button>
+            <button onClick={() => goToPage(currentPage - 1)} disabled={currentPage === 1} style={{ padding: "4px 8px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--bg-primary)", cursor: "pointer", fontSize: 12 }}>«</button>
+            {getPageNumbers().map((p, i) => typeof p === "number" ? (
+              <button key={i} onClick={() => goToPage(p)} style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid var(--border)", background: currentPage === p ? "orange" : "var(--bg-primary)", color: currentPage === p ? "#fff" : "var(--text-primary)", cursor: "pointer", fontSize: 12 }}>{p}</button>
+            ) : (
+              <span key={i} style={{ color: "var(--text-muted)" }}>{p}</span>
+            ))}
+            <button onClick={() => goToPage(currentPage + 1)} disabled={currentPage === totalPages} style={{ padding: "4px 8px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--bg-primary)", cursor: "pointer", fontSize: 12 }}>»</button>
+            <button onClick={() => goToPage(totalPages)} disabled={currentPage === totalPages} style={{ padding: "4px 8px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--bg-primary)", cursor: "pointer", fontSize: 12 }}>»»</button>
+            {showPageInput ? (
+              <input type="number" value={pageInput} onChange={(e) => setPageInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handlePageInput()} onBlur={handlePageInput} autoFocus min={1} max={totalPages}
+                style={{ width: 50, padding: 4, borderRadius: 4, border: "1px solid var(--accent)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: 12 }} />
+            ) : (
+              <button onClick={() => setShowPageInput(true)} style={{ padding: "4px 8px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--bg-primary)", cursor: "pointer", fontSize: 12 }}>[ ]</button>
+            )}
+          </div>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>Выбрано: {selected.size}</span>
+          <div style={{ display: "flex", gap: 12 }}>
+            <button onClick={onClose} style={{ padding: "8px 16px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-tertiary)", color: "var(--text-primary)", cursor: "pointer" }}>Отмена</button>
+            <button onClick={() => onSave(Array.from(selected))} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "var(--accent)", color: "#fff", cursor: "pointer", fontWeight: 600 }}>Сохранить</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export const dynamic = "force-dynamic";
 
@@ -86,6 +210,17 @@ export default function ProfilePage() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   const [editBook, setEditBook] = useState<Book | null>(null);
+  const [uploadTitle, setUploadTitle] = useState("");
+  const [editSeriesName, setEditSeriesName] = useState("");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploadGenres, setUploadGenres] = useState("");
+  const [uploadDescription, setUploadDescription] = useState("");
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [showGenreModal, setShowGenreModal] = useState(false);
+  const [showSeriesModal, setShowSeriesModal] = useState(false);
+  const [showCreateSeriesModal, setShowCreateSeriesModal] = useState(false);
+  const [newSeriesName, setNewSeriesName] = useState("");
+  const [coverFile, setCoverFile] = useState<File | null>(null);
   const [editChapters, setEditChapters] = useState<Chapter[]>([]);
   const [editChaptersRaw, setEditChaptersRaw] = useState<any[]>([]);
   const [editLoading, setEditLoading] = useState(false);
@@ -133,34 +268,47 @@ export default function ProfilePage() {
     } catch {}
   };
 
-  const handleUpload = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const files = fileRef.current?.files;
-    if (!files || files.length === 0) return;
+  const handleUploadClick = () => {
+    fileRef.current?.click();
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files?.[0]) {
+      setSelectedFile(e.target.files[0]);
+      setShowUploadModal(true);
+      e.target.value = "";
+    }
+  };
+
+  const handleUploadSubmit = async () => {
+    if (!selectedFile) return;
     setUploading(true);
     setError("");
-    let uploaded = 0;
-    const errors: string[] = [];
-    for (let i = 0; i < files.length; i++) {
-      try {
-        const book = await apiUploadBook(files[i], false);
-        if (activeTab === "series" && selectedSeries !== null) {
-          await apiAssignToSeries(book.id, [selectedSeries]);
-        }
-        uploaded++;
-      } catch (err: any) {
-        errors.push(`${files[i].name}: ${err.message}`);
+    try {
+      const book = await apiUploadBook(selectedFile, editSeriesName || undefined, uploadTitle || undefined, uploadGenres || undefined, uploadDescription || undefined);
+      if (coverFile) {
+        try {
+          await apiUploadCover(book.id, coverFile);
+        } catch {}
       }
+      await loadBooks();
+      await loadSeries();
+      setShowUploadModal(false);
+      setSelectedFile(null);
+      setEditSeriesName("");
+      setUploadTitle("");
+      setCoverFile(null);
+      setUploadGenres("");
+      setUploadDescription("");
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setUploading(false);
     }
-    await loadBooks();
-    await loadSeries();
-    if (fileRef.current) fileRef.current.value = "";
-    setUploading(false);
-    if (errors.length > 0) setError(`${uploaded} uploaded, ${errors.length} failed: ${errors.join("; ")}`);
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm("Delete this book?")) return;
+    if (!confirm("Удалить эту книгу?")) return;
     try {
       await apiDeleteBook(id);
       setBooks((prev) => prev.filter((b) => b.id !== id));
@@ -179,21 +327,30 @@ export default function ProfilePage() {
     }
   };
 
+  const handleCreateSeries = async () => {
+    const name = prompt("Название новой серии:");
+    if (!name) return;
+    const clean = name.replace(/[.,;:!?'"()[\]{}~`@#$%^&*+=<>]/g, "").trim();
+    if (!clean) {
+      alert("Название не может состоять только из спецсимволов");
+      return;
+    }
+    if (name !== clean) {
+      alert(`Название серии не должно содержать спецсимволы. Используйте: ${clean}`);
+      return;
+    }
+    try {
+      await apiCreateSeries(name);
+      await loadSeries();
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
   const handleAssignSeries = async (bookId: number, seriesIds: number[]) => {
     try {
       await apiAssignToSeries(bookId, seriesIds);
       await loadBooks();
-      await loadSeries();
-    } catch (err: any) {
-      setError(err.message);
-    }
-  };
-
-  const handleCreateSeries = async () => {
-    const name = prompt("Название серии:");
-    if (!name) return;
-    try {
-      await apiCreateSeries(name);
       await loadSeries();
     } catch (err: any) {
       setError(err.message);
@@ -442,20 +599,75 @@ export default function ProfilePage() {
         )}
 
         {/* Upload */}
-        <form onSubmit={handleUpload} style={{ marginBottom: 24, padding: 24, borderRadius: 14, border: "2px dashed var(--border)", background: "var(--bg-secondary)" }}>
+        <div style={{ marginBottom: 24, padding: 24, borderRadius: 14, border: "2px dashed var(--border)", background: "var(--bg-secondary)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-            <input ref={fileRef} type="file" accept=".txt,.fb2,.epub,.vb,.vblite" multiple style={{ fontSize: 14, color: "var(--text-secondary)" }} />
-            <button type="submit" disabled={uploading} style={btn("var(--accent)", "#fff", { padding: "10px 20px", fontSize: 14, fontWeight: 600, opacity: uploading ? 0.7 : 1, cursor: uploading ? "wait" : "pointer" })}>
-              {uploading ? "Загрузка…" : "Загрузить книги"}
+            <input ref={fileRef} type="file" accept=".txt,.fb2,.epub,.vb,.vblite" style={{ display: "none" }} onChange={handleFileSelect} />
+            <button type="button" onClick={handleUploadClick} disabled={uploading} style={btn("var(--accent)", "#fff", { padding: "10px 20px", fontSize: 14, fontWeight: 600, opacity: uploading ? 0.7 : 1, cursor: uploading ? "wait" : "pointer" })}>
+              {uploading ? "Загрузка…" : "Загрузить книгу"}
             </button>
             <span style={{ fontSize: 12, color: "var(--text-muted)" }}>.txt, .fb2, .epub, .vb, .vblite</span>
-            {activeTab === "series" && selectedSeries !== null && (
-              <span style={{ fontSize: 12, color: "var(--accent)" }}>
-                → будет добавлено в «{seriesList.find((s) => s.id === selectedSeries)?.name}»
-              </span>
-            )}
           </div>
-        </form>
+        </div>
+
+        {showUploadModal && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+            <div style={{ background: "var(--bg-secondary)", padding: 24, borderRadius: 12, width: "90%", maxWidth: 400 }}>
+              <h2 style={{ marginBottom: 16, fontSize: 20, fontWeight: 600 }}>Загрузка книги</h2>
+              <p style={{ marginBottom: 12, color: "var(--text-secondary)", fontSize: 14 }}>Файл: <strong>{selectedFile?.name}</strong></p>
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>Название книги</label>
+                <input
+                  value={uploadTitle}
+                  onChange={(e) => setUploadTitle(e.target.value)}
+                  placeholder="Введите название (необязательно)"
+                  style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-primary)" }}
+                />
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>Обложка</label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => setCoverFile(e.target.files?.[0] || null)}
+                  style={{ fontSize: 13, color: "var(--text-primary)" }}
+                />
+                {coverFile && <span style={{ marginLeft: 8, fontSize: 12, color: "var(--accent)" }}>{coverFile.name}</span>}
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>Серия</label>
+                <button
+                  onClick={() => setShowSeriesModal(true)}
+                  style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-primary)", cursor: "pointer", width: "100%", textAlign: "left" }}
+                >
+                  {editSeriesName ? editSeriesName : "Выбрать серию"}
+                </button>
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>Жанры</label>
+                <button
+                  onClick={() => setShowGenreModal(true)}
+                  style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-primary)", cursor: "pointer", width: "100%", textAlign: "left" }}
+                >
+                  {uploadGenres ? uploadGenres.split(",").length + " выбрано" : "Выбрать жанры"}
+                </button>
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>Описание</label>
+                <textarea
+                  value={uploadDescription}
+                  onChange={(e) => setUploadDescription(e.target.value)}
+                  rows={3}
+                  placeholder="Краткое описание книги..."
+                  style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-primary)" }}
+                />
+              </div>
+              <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
+                <button onClick={() => { setShowUploadModal(false); setSelectedFile(null); setEditSeriesName(""); setUploadTitle(""); setUploadGenres(""); setUploadDescription(""); setShowSeriesModal(false); setShowCreateSeriesModal(false); setNewSeriesName(""); }} style={btn("var(--bg-tertiary)", "var(--text-primary)")}>Отмена</button>
+                <button onClick={handleUploadSubmit} disabled={uploading} style={btn("var(--accent)", "#fff")}>Загрузить</button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Search + Sort */}
         {books.length > 0 && (
@@ -556,12 +768,8 @@ export default function ProfilePage() {
                            <option key={s.id} value={s.id}>{s.name}</option>
                          ))}
                        </select>
-                     </div>
-                    <button onClick={() => handleToggle(book.id, book.is_public)}
-                      style={btn(book.is_public ? "rgba(34,197,94,0.1)" : "var(--bg-tertiary)", book.is_public ? "var(--success)" : "var(--text-muted)", { fontSize: 12 })}>
-                      {book.is_public ? "Публичная" : "Личная"}
-                    </button>
-                     <Link href={`/reader/${book.id}`} style={{ padding: "4px 12px", borderRadius: 6, background: "var(--accent)", color: "#fff", textDecoration: "none", fontSize: 12, fontWeight: 600 }}>
+                      </div>
+                      <Link href={`/reader/${book.id}`} style={{ padding: "4px 12px", borderRadius: 6, background: "var(--accent)", color: "#fff", textDecoration: "none", fontSize: 12, fontWeight: 600 }}>
                        Читать
                      </Link>
                      <Link href={`/book/${book.id}`} style={{ padding: "4px 12px", borderRadius: 6, background: "var(--accent-light)", color: "var(--accent)", textDecoration: "none", fontSize: 12, fontWeight: 500 }}>
@@ -634,6 +842,71 @@ export default function ProfilePage() {
           </div>
         </div>
       )}
+
+        {/* Genre Modal */}
+        {showGenreModal && (
+          <GenreModal
+            selectedGenres={uploadGenres ? uploadGenres.split(",").map(g => g.trim()).filter(g => g) : []}
+            onSave={(selected) => setUploadGenres(selected.join(", "))}
+            onClose={() => setShowGenreModal(false)}
+          />
+        )}
+
+        {/* Series Modal */}
+        {showSeriesModal && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000 }}>
+            <div style={{ background: "var(--bg-secondary)", borderRadius: 12, width: "90%", maxWidth: 400, maxHeight: "80vh", display: "flex", flexDirection: "column" }}>
+              <div style={{ padding: 20, borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <h2 style={{ fontSize: 18, fontWeight: 600 }}>Выбор серии</h2>
+                <button onClick={() => setShowSeriesModal(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "var(--text-muted)" }}>✕</button>
+              </div>
+              <div style={{ flex: 1, overflow: "auto", padding: 12 }}>
+                {seriesList.length === 0 ? (
+                  <p style={{ textAlign: "center", color: "var(--text-muted)", padding: 20 }}>Нет серий</p>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {seriesList.map((s) => (
+                      <button key={s.id} onClick={() => { setEditSeriesName(s.name); setShowSeriesModal(false); }}
+                        style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid var(--border)", background: editSeriesName === s.name ? "var(--accent)" : "var(--bg-primary)", color: editSeriesName === s.name ? "#fff" : "var(--text-primary)", cursor: "pointer", textAlign: "left" }}>
+                        {s.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div style={{ padding: 16, borderTop: "1px solid var(--border)" }}>
+                <button onClick={() => { setShowSeriesModal(false); setShowCreateSeriesModal(true); }}
+                  style={{ width: "100%", padding: "10px 14px", borderRadius: 8, border: "1px dashed var(--border)", background: "transparent", color: "var(--accent)", cursor: "pointer", fontSize: 14 }}>
+                  + Создать новую серию
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Create Series Modal */}
+        {showCreateSeriesModal && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2001 }}>
+            <div style={{ background: "var(--bg-secondary)", borderRadius: 12, width: "90%", maxWidth: 350, padding: 24 }}>
+              <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 16 }}>Создать серию</h2>
+              <input value={newSeriesName} onChange={(e) => setNewSeriesName(e.target.value)} placeholder="Название серии"
+                style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-primary)", marginBottom: 16, boxSizing: "border-box" }} />
+              <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
+                <button onClick={() => { setShowCreateSeriesModal(false); setNewSeriesName(""); }} style={{ padding: "8px 16px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-tertiary)", cursor: "pointer" }}>Отмена</button>
+                <button onClick={async () => {
+                  if (!newSeriesName.trim()) return;
+                  try {
+                    await apiCreateSeries(newSeriesName.trim());
+                    await loadSeries();
+                    setEditSeriesName(newSeriesName.trim());
+                    setShowCreateSeriesModal(false);
+                    setNewSeriesName("");
+                  } catch (err: any) { alert(err.message); }
+                }} disabled={!newSeriesName.trim()} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "var(--accent)", color: "#fff", cursor: newSeriesName.trim() ? "pointer" : "not-allowed" }}>Создать</button>
+              </div>
+            </div>
+          </div>
+        )}
     </div>
   );
 }
