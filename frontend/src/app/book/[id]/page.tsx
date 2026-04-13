@@ -15,6 +15,12 @@ import {
   getToken,
   mergeUser,
   apiGetMe,
+  apiLikeBook,
+  apiUnlikeBook,
+  apiSubscribe,
+  apiUnsubscribe,
+  apiMySubscriptions,
+  apiIncrementView,
 } from "@/lib/api";
 import { GenreSelector } from "@/components/GenreSelector";
 
@@ -32,6 +38,7 @@ export default function BookPage({ params }: { params: { id: string } }) {
   const [editGenres, setEditGenres] = useState<string[]>([]);
   const [editDescription, setEditDescription] = useState("");
   const [showGenreModal, setShowGenreModal] = useState(false);
+  const [subscribedAuthors, setSubscribedAuthors] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     loadData();
@@ -63,6 +70,14 @@ export default function BookPage({ params }: { params: { id: string } }) {
       setEditDescription(b.description || "");
       const c = await apiGetComments(bookId);
       setComments(c);
+      
+      const u = getUser();
+      if (u) {
+        const subs = await apiMySubscriptions();
+        const subSet = new Set<number>();
+        subs.forEach((s: any) => subSet.add(s.author_id));
+        setSubscribedAuthors(subSet);
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -108,6 +123,47 @@ export default function BookPage({ params }: { params: { id: string } }) {
       await apiUpdateMetadata(bookId, { genres: editGenres.join(", "), description: editDescription });
       await loadData();
       setEditMode(false);
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleLike = async () => {
+    const u = getUser();
+    if (!u) {
+      router.push("/login");
+      return;
+    }
+    try {
+      if (book.is_liked) {
+        await apiUnlikeBook(bookId);
+        setBook((prev: any) => prev ? { ...prev, is_liked: false, like_count: Math.max(0, (prev.like_count || 0) - 1) } : null);
+      } else {
+        await apiLikeBook(bookId);
+        setBook((prev: any) => prev ? { ...prev, is_liked: true, like_count: (prev.like_count || 0) + 1 } : null);
+      }
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleSubscribe = async () => {
+    const u = getUser();
+    if (!u) {
+      router.push("/login");
+      return;
+    }
+    if (book.owner_id === u.id) return;
+    try {
+      const newSubscribed = new Set(subscribedAuthors);
+      if (subscribedAuthors.has(book.owner_id)) {
+        await apiUnsubscribe(book.owner_id);
+        newSubscribed.delete(book.owner_id);
+      } else {
+        await apiSubscribe(book.owner_id);
+        newSubscribed.add(book.owner_id);
+      }
+      setSubscribedAuthors(newSubscribed);
     } catch (err: any) {
       alert(err.message);
     }
@@ -161,6 +217,16 @@ export default function BookPage({ params }: { params: { id: string } }) {
             <p style={{ color: "var(--text-secondary)", marginBottom: 4 }}>Формат: {book?.filename.split('.').pop()?.toLowerCase() ? '.' + book?.filename.split('.').pop()?.toLowerCase() : ''}</p>
             <p style={{ color: "var(--text-secondary)", marginBottom: 4 }}>Владелец: {book?.owner_username}</p>
             <p style={{ color: "var(--text-secondary)", marginBottom: 8 }}>Главы: {book?.has_structure ? "Да" : "Нет"}</p>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12 }}>
+              <button onClick={handleLike} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-secondary)", cursor: "pointer", fontSize: 14, color: book?.is_liked ? "red" : "var(--text-secondary)" }}>
+                {book?.is_liked ? "❤️" : "🤍"} {book?.like_count || 0}
+              </button>
+              {user && user.id !== book?.owner_id && (
+                <button onClick={handleSubscribe} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid var(--border)", background: subscribedAuthors.has(book?.owner_id) ? "var(--accent)" : "var(--bg-secondary)", color: subscribedAuthors.has(book?.owner_id) ? "#fff" : "var(--text-secondary)", cursor: "pointer", fontSize: 13 }}>
+                  {subscribedAuthors.has(book?.owner_id) ? "✓ Подписан" : "Подписаться"}
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Comments in left column */}
@@ -176,9 +242,16 @@ export default function BookPage({ params }: { params: { id: string } }) {
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               {comments.map((comment) => (
                 <div key={comment.id} style={{ padding: 12, borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-secondary)" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                    {comment.user_avatar ? (
+                      <img src={`/api/books/user/avatar/${comment.user_id}`} alt="" style={{ width: 24, height: 24, borderRadius: "50%", objectFit: "cover" }} />
+                    ) : (
+                      <div style={{ width: 24, height: 24, borderRadius: "50%", background: "orange", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 600, color: "#fff" }}>
+                        {comment.user_username[0].toUpperCase()}
+                      </div>
+                    )}
                     <strong style={{ color: "var(--text-primary)" }}>{comment.user_username}</strong>
-                    <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{new Date(comment.created_at).toLocaleString()}</span>
+                    <span style={{ fontSize: 12, color: "var(--text-muted)", marginLeft: "auto" }}>{new Date(comment.created_at).toLocaleString()}</span>
                   </div>
                   <p style={{ color: "var(--text-primary)", whiteSpace: "pre-wrap" }}>{comment.content}</p>
                   {(user?.id === comment.user_id || user?.role === "admin") && <button onClick={() => handleDeleteComment(comment.id)} style={{ marginTop: 8, fontSize: 12, color: "var(--error)", background: "none", border: "none", cursor: "pointer" }}>Удалить</button>}
@@ -221,7 +294,7 @@ export default function BookPage({ params }: { params: { id: string } }) {
           {isOwner && !editMode && <button onClick={() => setEditMode(true)} style={{ marginTop: 8, padding: "6px 12px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-secondary)", cursor: "pointer" }}>Изменить описание</button>}
 
           <div style={{ marginTop: 24 }}>
-            <Link href={`/reader/${bookId}`} style={{ display: "block", padding: "10px 0", textAlign: "center", background: "var(--accent)", color: "#fff", textDecoration: "none", borderRadius: 8, fontWeight: 600 }}>Читать книгу</Link>
+            <Link href={`/reader/${bookId}`} onClick={() => apiIncrementView(bookId).catch(() => {})} style={{ display: "block", padding: "10px 0", textAlign: "center", background: "var(--accent)", color: "#fff", textDecoration: "none", borderRadius: 8, fontWeight: 600 }}>Читать книгу</Link>
           </div>
         </div>
       </div>

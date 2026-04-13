@@ -7,11 +7,12 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import func, UniqueConstraint
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
-from database import Series, Book, User, Comment, get_db
-from auth import require_user, get_current_user
+from database import Series, Book, User, Comment, Like, Subscription, Notification, get_db
+from auth import require_user, get_current_user, require_admin
 from vb_parser import parse_vb, parse_fb2, extract_plain_text
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
@@ -20,6 +21,26 @@ COVERS_DIR = os.path.join(os.path.dirname(__file__), "covers")
 os.makedirs(COVERS_DIR, exist_ok=True)
 
 SUPPORTED_EXTENSIONS = (".txt", ".fb2", ".epub", ".vb", ".vblite")
+
+
+def is_animated_image(content: bytes) -> bool:
+    """Check if image is animated (GIF89a with NETSCAPE extension or WebP with animation)."""
+    if content[:6] == b"\x47\x49\x46\x38\x39\x61":
+        if b"NETSCAPE" in content:
+            return True
+    if content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        if b"ANIM" in content[:100]:
+            return True
+    return False
+
+
+def get_image_extension(filename: str, content: bytes) -> str:
+    """Get safe image extension, considering content type."""
+    ext = os.path.splitext(filename)[1].lower() if filename else ".jpg"
+    if ext not in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+        return ".jpg"
+    return ext
+
 
 router = APIRouter(prefix="/api/books", tags=["books"])
 
@@ -39,6 +60,36 @@ class BookOut(BaseModel):
     genres: Optional[str] = None
     description: Optional[str] = None
     comment_count: int = 0
+    like_count: int = 0
+    is_liked: bool = False
+    view_count: int = 0
+    owner_avatar: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AuthorOut(BaseModel):
+    id: int
+    username: str
+    book_count: int = 0
+    is_subscribed: bool = False
+    subscriber_count: int = 0
+    total_views: int = 0
+    total_comments: int = 0
+    avatar_url: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class NotificationOut(BaseModel):
+    id: int
+    type: str
+    message: str
+    link: Optional[str] = None
+    is_read: bool
+    created_at: datetime
 
     class Config:
         from_attributes = True
@@ -53,6 +104,7 @@ class CommentOut(BaseModel):
     id: int
     user_id: int
     user_username: str
+    user_avatar: Optional[str] = None
     content: str
     created_at: datetime
 
@@ -113,11 +165,16 @@ async def upload_book(
         )
 
     content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+    
     sha256 = hashlib.sha256(content).hexdigest()
+    print(f"Uploaded file SHA256: {sha256}")
 
-    existing = db.query(Book).filter(Book.owner_id == user.id, Book.sha256 == sha256).first()
-    if existing:
-        raise HTTPException(status_code=409, detail=f"Duplicate book: '{existing.title}' already in your library")
+    duplicate = db.query(Book).filter(Book.owner_id == user.id, Book.sha256 == sha256).first()
+    if duplicate:
+        print(f"Duplicate detected: existing book {duplicate.id} with same SHA256")
+        raise HTTPException(status_code=409, detail="Эта книга уже есть в вашей библиотеке")
 
     user_dir = os.path.join(UPLOAD_DIR, str(user.id))
     os.makedirs(user_dir, exist_ok=True)
@@ -144,6 +201,14 @@ async def upload_book(
     )
     db.add(book)
     
+    try:
+        db.commit()
+        db.refresh(book)
+    except IntegrityError:
+        db.rollback()
+        db.query(Book).filter(Book.owner_id == user.id, Book.sha256 == sha256).first()
+        raise HTTPException(status_code=409, detail="Эта книга уже есть в вашей библиотеке")
+
     if series_name:
         series_name = series_name.strip()
         if series_name:
@@ -175,6 +240,8 @@ async def upload_book(
         has_structure=structured_content is not None,
         series_ids=[s.id for s in book.series_list],
         series_names=[s.name for s in book.series_list],
+        view_count=0,
+        owner_avatar=None,
     )
 
 
@@ -200,6 +267,8 @@ def my_books(user: User = Depends(require_user), db: Session = Depends(get_db)):
             genres=b.genres,
             description=b.description,
             comment_count=comment_count,
+            view_count=b.view_count or 0,
+            owner_avatar=owner.avatar_url if owner else None,
         ))
     return result
 
@@ -208,13 +277,60 @@ def my_books(user: User = Depends(require_user), db: Session = Depends(get_db)):
 def public_books(
     db: Session = Depends(get_db),
     user: Optional[User] = Depends(get_current_user),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    search: Optional[str] = Query(None),
+    sort_by: Optional[str] = Query("created_at", description="created_at, likes, views"),
+    genre: Optional[str] = Query(None),
+    extension: Optional[str] = Query(None),
+    min_pages: Optional[int] = Query(None),
 ):
-    books = db.query(Book).filter(Book.is_public == True).order_by(Book.created_at.desc()).all()
+    query = db.query(Book).filter(Book.is_public == True)
+    
+    if search:
+        search_lower = search.lower()
+        query = query.filter(
+            (Book.title.ilike(f"%{search_lower}%")) |
+            (Book.description.ilike(f"%{search_lower}%")) |
+            (Book.genres.ilike(f"%{search_lower}%"))
+        )
+    
+    if genre:
+        query = query.filter(Book.genres.ilike(f"%{genre}%"))
+    
+    if extension:
+        ext = f".{extension.lower().strip('.')}"
+        query = query.filter(Book.filename.ilike(f"%{ext}"))
+    
+    total = query.count()
+    
+    if sort_by == "likes":
+        # Need to join with Like to sort - get book IDs with like counts
+        books_with_likes = db.query(
+            Book.id,
+            func.count(Like.id).label("like_count")
+        ).outerjoin(Like, Book.id == Like.book_id).filter(Book.is_public == True).group_by(Book.id).order_by(func.count(Like.id).desc()).all()
+        book_ids_ordered = [b.id for b in books_with_likes]
+        # Manual sort
+        books = query.all()
+        books.sort(key=lambda b: book_ids_ordered.index(b.id) if b.id in book_ids_ordered else 9999)
+    elif sort_by == "views":
+        query = query.order_by(Book.view_count.desc())
+        books = query.offset((page - 1) * limit).limit(limit).all()
+    else:  # created_at
+        query = query.order_by(Book.created_at.desc())
+        books = query.offset((page - 1) * limit).limit(limit).all()
+    
     result = []
     for b in books:
         owner = db.query(User).filter(User.id == b.owner_id).first()
         has_struct = os.path.exists(b.file_path + ".struct.json") if b.file_path else False
         comment_count = db.query(Comment).filter(Comment.book_id == b.id).count()
+        like_count = db.query(Like).filter(Like.book_id == b.id).count()
+        is_liked = False
+        if user:
+            like = db.query(Like).filter(Like.user_id == user.id, Like.book_id == b.id).first()
+            is_liked = bool(like)
         result.append(BookOut(
             id=b.id, title=b.title, filename=b.filename, sha256=b.sha256,
             is_public=b.is_public, owner_id=b.owner_id,
@@ -226,8 +342,51 @@ def public_books(
             genres=b.genres,
             description=b.description,
             comment_count=comment_count,
+            like_count=like_count,
+            is_liked=is_liked,
+            view_count=b.view_count or 0,
+            owner_avatar=owner.avatar_url if owner else None,
         ))
     return result
+
+
+@router.get("/public/count")
+def public_books_count(
+    db: Session = Depends(get_db),
+    search: Optional[str] = Query(None),
+):
+    query = db.query(Book).filter(Book.is_public == True)
+    
+    if search:
+        search_lower = search.lower()
+        query = query.filter(
+            (Book.title.ilike(f"%{search_lower}%")) |
+            (Book.description.ilike(f"%{search_lower}%")) |
+            (Book.genres.ilike(f"%{search_lower}%"))
+        )
+    
+    return {"total": query.count()}
+
+
+@router.get("/public/hot")
+def hot_books(
+    db: Session = Depends(get_db),
+    user: Optional[User] = Depends(get_current_user),
+):
+    """Get 5 random books from Plus users for hot books section."""
+    plus_users = db.query(User).filter(User.is_plus == True).all()
+    if not plus_users:
+        return []
+    plus_user_ids = [u.id for u in plus_users]
+    books = db.query(Book).filter(
+        Book.is_public == True,
+        Book.owner_id.in_(plus_user_ids)
+    ).all()
+    if len(books) <= 5:
+        return [{"id": b.id, "title": b.title, "cover_image": b.cover_image, "owner_id": b.owner_id, "owner_username": b.owner.username if b.owner else ""} for b in books]
+    import random
+    selected = random.sample(books, 5)
+    return [{"id": b.id, "title": b.title, "cover_image": b.cover_image, "owner_id": b.owner_id, "owner_username": b.owner.username if b.owner else ""} for b in selected]
 
 
 @router.get("/search")
@@ -269,9 +428,71 @@ def search_books(
                 genres=b.genres,
                 description=b.description,
                 comment_count=comment_count,
+                view_count=b.view_count or 0,
+                owner_avatar=owner.avatar_url if owner else None,
             ))
     
     return result
+
+
+# Authors list - must be before /{book_id} route
+@router.get("/users-with-books", response_model=List[AuthorOut])
+def list_authors(
+    db: Session = Depends(get_db),
+    user: Optional[User] = Depends(get_current_user),
+):
+    authors = db.query(User).join(Book).filter(Book.is_public == True).distinct().all()
+    result = []
+    for a in authors:
+        books = db.query(Book).filter(Book.owner_id == a.id, Book.is_public == True).all()
+        book_count = len(books)
+        total_views = sum(b.view_count or 0 for b in books)
+        total_comments = sum(db.query(Comment).filter(Comment.book_id == b.id).count() for b in books)
+        subscriber_count = db.query(Subscription).filter(Subscription.author_id == a.id).count()
+        is_subscribed = False
+        if user:
+            sub = db.query(Subscription).filter(Subscription.subscriber_id == user.id, Subscription.author_id == a.id).first()
+            is_subscribed = bool(sub)
+        result.append(AuthorOut(
+            id=a.id,
+            username=a.username,
+            book_count=book_count,
+            is_subscribed=is_subscribed,
+            subscriber_count=subscriber_count,
+            total_views=total_views,
+            total_comments=total_comments,
+            avatar_url=a.avatar_url,
+        ))
+    return result
+
+
+@router.get("/author/{user_id}")
+def get_author(
+    user_id: int,
+    db: Session = Depends(get_db),
+    user: Optional[User] = Depends(get_current_user),
+):
+    author = db.query(User).filter(User.id == user_id).first()
+    if not author:
+        raise HTTPException(status_code=404, detail="Author not found")
+    books = db.query(Book).filter(Book.owner_id == user_id, Book.is_public == True).all()
+    series_list = db.query(Series).filter(Series.owner_id == user_id).all()
+    subscriber_count = db.query(Subscription).filter(Subscription.author_id == user_id).count()
+    is_subscribed = False
+    if user:
+        sub = db.query(Subscription).filter(Subscription.subscriber_id == user.id, Subscription.author_id == user_id).first()
+        is_subscribed = bool(sub)
+    return {
+        "id": author.id,
+        "username": author.username,
+        "avatar_url": author.avatar_url,
+        "book_count": len(books),
+        "series_count": len(series_list),
+        "subscriber_count": subscriber_count,
+        "is_subscribed": is_subscribed,
+        "books": [{"id": b.id, "title": b.title, "cover_image": b.cover_image, "genres": b.genres, "view_count": b.view_count, "like_count": db.query(Like).filter(Like.book_id == b.id).count()} for b in books],
+        "series": [{"id": s.id, "name": s.name, "cover_image": s.cover_image, "book_count": len(s.books)} for s in series_list],
+    }
 
 
 @router.get("/{book_id}", response_model=BookOut)
@@ -288,6 +509,11 @@ def get_book(
     owner = db.query(User).filter(User.id == book.owner_id).first()
     has_struct = os.path.exists(book.file_path + ".struct.json") if book.file_path else False
     comment_count = db.query(Comment).filter(Comment.book_id == book.id).count()
+    like_count = db.query(Like).filter(Like.book_id == book.id).count()
+    is_liked = False
+    if user:
+        like = db.query(Like).filter(Like.user_id == user.id, Like.book_id == book.id).first()
+        is_liked = bool(like)
     return BookOut(
         id=book.id, title=book.title, filename=book.filename, sha256=book.sha256,
         is_public=book.is_public, owner_id=book.owner_id,
@@ -299,7 +525,26 @@ def get_book(
         genres=book.genres,
         description=book.description,
         comment_count=comment_count,
+        like_count=like_count,
+        is_liked=is_liked,
+        view_count=book.view_count or 0,
+        owner_avatar=owner.avatar_url if owner else None,
     )
+
+
+@router.post("/{book_id}/view")
+def increment_view_count(
+    book_id: int,
+    db: Session = Depends(get_db),
+):
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    if not book.is_public:
+        raise HTTPException(status_code=403, detail="Book is not public")
+    book.view_count = (book.view_count or 0) + 1
+    db.commit()
+    return {"view_count": book.view_count}
 
 
 @router.get("/{book_id}/text")
@@ -518,7 +763,7 @@ def list_series(
     result = []
     for s in series_list:
         book_count = len(s.books)
-        result.append({"id": s.id, "name": s.name, "book_count": book_count})
+        result.append({"id": s.id, "name": s.name, "book_count": book_count, "cover_image": s.cover_image})
     return result
 
 
@@ -532,8 +777,158 @@ def list_public_series(db: Session = Depends(get_db)):
         if lower_name in seen_lower:
             continue
         seen_lower.add(lower_name)
-        result.append({"id": s.id, "name": s.name, "book_count": len(s.books)})
+        books = s.books
+        total_likes = sum(db.query(Like).filter(Like.book_id == b.id).count() for b in books)
+        total_comments = sum(db.query(Comment).filter(Comment.book_id == b.id).count() for b in books)
+        total_views = sum(b.view_count or 0 for b in books)
+        result.append({
+            "id": s.id, 
+            "name": s.name, 
+            "book_count": len(books),
+            "cover_image": s.cover_image,
+            "total_likes": total_likes,
+            "total_comments": total_comments,
+            "total_views": total_views,
+            "owner_id": s.owner_id,
+            "owner_username": s.owner.username if s.owner else "",
+            "owner_avatar": s.owner.avatar_url if s.owner else None,
+        })
     return result
+
+
+@router.get("/series/{series_id}")
+def get_series(
+    series_id: int,
+    db: Session = Depends(get_db),
+):
+    s = db.query(Series).filter(Series.id == series_id).first()
+    if not s:
+        raise HTTPException(status_code=404, detail="Series not found")
+    
+    from database import book_series_association
+    books = db.query(Book).join(book_series_association).filter(
+        book_series_association.c.series_id == series_id
+    ).order_by(book_series_association.c.order_index).all()
+    
+    return {
+        "id": s.id,
+        "name": s.name,
+        "owner_id": s.owner_id,
+        "cover_image": s.cover_image,
+        "common_genres": s.common_genres,
+        "books": [{"id": b.id, "title": b.title, "cover_image": b.cover_image} for b in books],
+    }
+
+
+@router.put("/series/{series_id}")
+def update_series(
+    series_id: int,
+    payload: dict,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    s = db.query(Series).filter(Series.id == series_id, Series.owner_id == user.id).first()
+    if not s:
+        raise HTTPException(status_code=404, detail="Series not found")
+    
+    if "name" in payload:
+        s.name = payload["name"]
+    if "cover_image" in payload:
+        s.cover_image = payload["cover_image"]
+    if "common_genres" in payload:
+        s.common_genres = payload["common_genres"]
+        for book in s.books:
+            if book.genres:
+                existing = set(g.strip() for g in book.genres.split(","))
+                new = set(g.strip() for g in payload["common_genres"].split(","))
+                combined = ",".join(sorted(existing | new))
+                book.genres = combined
+            else:
+                book.genres = payload["common_genres"]
+    
+    db.commit()
+    return {"id": s.id, "name": s.name, "cover_image": s.cover_image, "common_genres": s.common_genres}
+
+
+@router.post("/series/{series_id}/cover")
+async def upload_series_cover(
+    series_id: int,
+    file: UploadFile = File(...),
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    s = db.query(Series).filter(Series.id == series_id, Series.owner_id == user.id).first()
+    if not s:
+        raise HTTPException(status_code=404, detail="Series not found")
+    
+    content = await file.read()
+    ext = get_image_extension(file.filename, content)
+    
+    if ext == ".gif" and not user.is_plus and not is_animated_image(content):
+        ext = ".jpg"
+    elif ext == ".gif" and not user.is_plus:
+        raise HTTPException(status_code=403, detail="GIF анимация доступна только для Plus пользователей")
+    elif ext == ".webp" and is_animated_image(content) and not user.is_plus:
+        raise HTTPException(status_code=403, detail="Анимированные изображения доступны только для Plus пользователей")
+    
+    if ext not in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+        raise HTTPException(status_code=400, detail="Invalid image format")
+    
+    series_dir = os.path.join(UPLOAD_DIR, "series_covers")
+    os.makedirs(series_dir, exist_ok=True)
+    cover_filename = f"series_{series_id}{ext}"
+    cover_path = os.path.join(series_dir, cover_filename)
+    
+    with open(cover_path, "wb") as f:
+        f.write(content)
+    
+    s.cover_image = cover_filename
+    db.commit()
+    return {"cover_image": s.cover_image}
+
+
+@router.get("/series/{series_id}/cover")
+def get_series_cover(
+    series_id: int,
+    db: Session = Depends(get_db),
+):
+    s = db.query(Series).filter(Series.id == series_id).first()
+    if not s or not s.cover_image:
+        raise HTTPException(status_code=404, detail="No cover")
+    series_dir = os.path.join(UPLOAD_DIR, "series_covers")
+    cover_path = os.path.join(series_dir, s.cover_image)
+    if not os.path.exists(cover_path):
+        raise HTTPException(status_code=404, detail="Cover file missing")
+    return FileResponse(cover_path)
+
+
+@router.put("/series/{series_id}/order")
+def reorder_series_books(
+    series_id: int,
+    payload: dict,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    s = db.query(Series).filter(Series.id == series_id, Series.owner_id == user.id).first()
+    if not s:
+        raise HTTPException(status_code=404, detail="Series not found")
+    
+    book_order = payload.get("book_ids", [])
+    from sqlalchemy import update
+    from database import book_series_association
+    
+    for idx, book_id in enumerate(book_order):
+        stmt = (
+            update(book_series_association)
+            .where(book_series_association.c.book_id == book_id)
+            .where(book_series_association.c.series_id == series_id)
+            .values(order_index=idx)
+        )
+        db.execute(stmt)
+    
+    db.commit()
+    return {"detail": "Order updated"}
+
 
 @router.delete("/series/{series_id}")
 def delete_series(
@@ -627,11 +1022,13 @@ async def upload_cover(
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
     content = await file.read()
-    # Determine extension
-    ext = os.path.splitext(file.filename)[1].lower() if file.filename else ".jpg"
-    # Ensure it's an image extension (simple check)
-    if ext not in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
-        raise HTTPException(status_code=400, detail="Invalid image format")
+    ext = get_image_extension(file.filename, content)
+    
+    if ext == ".gif" and is_animated_image(content) and not user.is_plus:
+        raise HTTPException(status_code=403, detail="GIF анимация доступна только для Plus пользователей")
+    elif ext == ".webp" and is_animated_image(content) and not user.is_plus:
+        raise HTTPException(status_code=403, detail="Анимированные изображения доступны только для Plus пользователей")
+    
     cover_filename = f"cover_{book_id}{ext}"
     cover_path = os.path.join(COVERS_DIR, cover_filename)
     # Remove old cover if exists
@@ -699,6 +1096,7 @@ def get_comments(
             id=c.id,
             user_id=c.user_id,
             user_username=c.user.username if c.user else "unknown",
+            user_avatar=c.user.avatar_url if c.user else None,
             content=c.content,
             created_at=c.created_at,
         ))
@@ -748,3 +1146,197 @@ def delete_comment(
     db.delete(comment)
     db.commit()
     return {"detail": "Deleted"}
+
+
+# Likes
+@router.post("/{book_id}/like")
+def like_book(
+    book_id: int,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    existing = db.query(Like).filter(Like.user_id == user.id, Like.book_id == book_id).first()
+    if existing:
+        return {"liked": True}
+    like = Like(user_id=user.id, book_id=book_id)
+    db.add(like)
+    db.commit()
+    if book.owner_id != user.id:
+        notif = Notification(
+            user_id=book.owner_id,
+            type="like",
+            message=f"Пользователь {user.username} оценил вашу книгу «{book.title}»",
+            link=f"/book/{book.id}"
+        )
+        db.add(notif)
+        db.commit()
+    return {"liked": True}
+
+
+@router.delete("/{book_id}/like")
+def unlike_book(
+    book_id: int,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    like = db.query(Like).filter(Like.user_id == user.id, Like.book_id == book_id).first()
+    if not like:
+        return {"liked": False}
+    db.delete(like)
+    db.commit()
+    return {"liked": False}
+
+
+# Subscriptions
+@router.post("/subscribe/{author_id}")
+def subscribe_to_author(
+    author_id: int,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    if author_id == user.id:
+        raise HTTPException(status_code=400, detail="Cannot subscribe to yourself")
+    author = db.query(User).filter(User.id == author_id).first()
+    if not author:
+        raise HTTPException(status_code=404, detail="Author not found")
+    existing = db.query(Subscription).filter(Subscription.subscriber_id == user.id, Subscription.author_id == author_id).first()
+    if existing:
+        return {"subscribed": True}
+    sub = Subscription(subscriber_id=user.id, author_id=author_id)
+    db.add(sub)
+    db.commit()
+    return {"subscribed": True}
+
+
+@router.delete("/subscribe/{author_id}")
+def unsubscribe_from_author(
+    author_id: int,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    sub = db.query(Subscription).filter(Subscription.subscriber_id == user.id, Subscription.author_id == author_id).first()
+    if not sub:
+        return {"subscribed": False}
+    db.delete(sub)
+    db.commit()
+    return {"subscribed": False}
+
+
+@router.get("/subscriptions")
+def my_subscriptions(
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    subs = db.query(Subscription).filter(Subscription.subscriber_id == user.id).all()
+    result = []
+    for s in subs:
+        author = db.query(User).filter(User.id == s.author_id).first()
+        book_count = db.query(Book).filter(Book.owner_id == s.author_id, Book.is_public == True).count()
+        result.append({
+            "author_id": s.author_id,
+            "author_username": author.username if author else "unknown",
+            "book_count": book_count,
+        })
+    return result
+
+
+# Notifications
+@router.get("/notifications", response_model=List[NotificationOut])
+def get_notifications(
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    notifs = db.query(Notification).filter(Notification.user_id == user.id).order_by(Notification.created_at.desc()).all()
+    return [NotificationOut(
+        id=n.id,
+        type=n.type,
+        message=n.message,
+        link=n.link,
+        is_read=n.is_read,
+        created_at=n.created_at,
+    ) for n in notifs]
+
+
+@router.get("/notifications/unread-count")
+def unread_count(
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    count = db.query(Notification).filter(Notification.user_id == user.id, Notification.is_read == False).count()
+    return {"count": count}
+
+
+@router.post("/notifications/{notif_id}/read")
+def mark_read(
+    notif_id: int,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    notif = db.query(Notification).filter(Notification.id == notif_id, Notification.user_id == user.id).first()
+    if not notif:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    notif.is_read = True
+    db.commit()
+    return {"read": True}
+
+
+@router.post("/notifications/read-all")
+def mark_all_read(
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    db.query(Notification).filter(Notification.user_id == user.id, Notification.is_read == False).update({"is_read": True})
+    db.commit()
+    return {"read": True}
+
+
+# End of routes
+
+
+# User avatar
+@router.post("/user/avatar")
+async def upload_avatar(
+    file: UploadFile = File(...),
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    content = await file.read()
+    ext = get_image_extension(file.filename, content)
+    
+    if ext == ".gif" and is_animated_image(content) and not user.is_plus:
+        raise HTTPException(status_code=403, detail="GIF анимация доступна только для Plus пользователей")
+    elif ext == ".webp" and is_animated_image(content) and not user.is_plus:
+        raise HTTPException(status_code=403, detail="Анимированные изображения доступны только для Plus пользователей")
+    
+    avatar_dir = os.path.join(os.path.dirname(__file__), "avatars")
+    os.makedirs(avatar_dir, exist_ok=True)
+    avatar_filename = f"avatar_{user.id}{ext}"
+    avatar_path = os.path.join(avatar_dir, avatar_filename)
+    if user.avatar_url and os.path.exists(os.path.join(avatar_dir, user.avatar_url)):
+        try:
+            os.remove(os.path.join(avatar_dir, user.avatar_url))
+        except OSError:
+            pass
+    with open(avatar_path, "wb") as f:
+        f.write(content)
+    user.avatar_url = avatar_filename
+    db.commit()
+    return {"avatar_url": user.avatar_url}
+
+
+@router.get("/user/avatar/{user_id}")
+def get_avatar(
+    user_id: int,
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or not user.avatar_url:
+        raise HTTPException(status_code=404, detail="No avatar")
+    avatar_dir = os.path.join(os.path.dirname(__file__), "avatars")
+    avatar_path = os.path.join(avatar_dir, user.avatar_url)
+    if not os.path.exists(avatar_path):
+        raise HTTPException(status_code=404, detail="Avatar file missing")
+    return FileResponse(avatar_path)

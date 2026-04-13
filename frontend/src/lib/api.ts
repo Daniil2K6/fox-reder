@@ -260,6 +260,10 @@ export function apiGetCoverUrl(bookId: number): string {
   return `/api/books/${bookId}/cover`;
 }
 
+export function apiGetSeriesCoverUrl(seriesId: number): string {
+  return `/api/books/series/${seriesId}/cover`;
+}
+
 export async function apiUpdateMetadata(bookId: number, data: { genres?: string; description?: string }) {
   const res = await request(`/api/books/${bookId}/metadata`, {
     method: "PUT",
@@ -305,5 +309,132 @@ export async function apiTTSChunkWithCharacter(text: string, language: string = 
     body: JSON.stringify(body),
   });
   return res.blob();
+}
+
+export async function apiPublicBooksCount(search?: string) {
+  let url = "/api/books/public/count";
+  if (search) url += `?search=${encodeURIComponent(search)}`;
+  const res = await request(url);
+  return res.json();
+}
+
+export async function apiLikeBook(bookId: number) {
+  const res = await request(`/api/books/${bookId}/like`, { method: "POST" });
+  return res.json();
+}
+
+export async function apiUnlikeBook(bookId: number) {
+  const res = await request(`/api/books/${bookId}/like`, { method: "DELETE" });
+  return res.json();
+}
+
+export async function apiSubscribe(authorId: number) {
+  const res = await request(`/api/books/subscribe/${authorId}`, { method: "POST" });
+  return res.json();
+}
+
+export async function apiUnsubscribe(authorId: number) {
+  const res = await request(`/api/books/subscribe/${authorId}`, { method: "DELETE" });
+  return res.json();
+}
+
+export async function apiMySubscriptions() {
+  const res = await request("/api/books/subscriptions");
+  return res.json();
+}
+
+export async function apiNotifications() {
+  const res = await request("/api/books/notifications");
+  return res.json();
+}
+
+export async function apiUnreadCount() {
+  const res = await request("/api/books/notifications/unread-count");
+  return res.json();
+}
+
+export async function apiMarkRead(notifId: number) {
+  const res = await request(`/api/books/notifications/${notifId}/read`, { method: "POST" });
+  return res.json();
+}
+
+export async function apiMarkAllRead() {
+  const res = await request("/api/books/notifications/read-all", { method: "POST" });
+  return res.json();
+}
+
+export async function apiAuthors() {
+  const res = await request("/api/books/users-with-books");
+  return res.json();
+}
+
+export async function apiIncrementView(bookId: number) {
+  const res = await request(`/api/books/${bookId}/view`, { method: "POST" });
+  return res.json();
+}
+
+export async function apiUploadAvatar(file: File) {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await request("/api/books/user/avatar", {
+    method: "POST",
+    body: form,
+  });
+  return res.json();
+}
+
+export function apiGetAvatarUrl(userId: number): string {
+  return `/api/books/user/avatar/${userId}`;
+}
+
+export async function apiPublicBooksPaginated(page: number = 1, limit: number = 20, search?: string, sortBy?: string, genre?: string, extension?: string) {
+  let url = `/api/books/public?page=${page}&limit=${limit}`;
+  if (search) url += `&search=${encodeURIComponent(search)}`;
+  if (sortBy) url += `&sort_by=${sortBy}`;
+  if (genre) url += `&genre=${encodeURIComponent(genre)}`;
+  if (extension) url += `&extension=${encodeURIComponent(extension)}`;
+  const res = await request(url);
+  return res.json();
+}
+
+export async function apiHotBooks() {
+  const res = await request("/api/books/public/hot");
+  return res.json();
+}
+
+export async function apiAuthor(userId: number) {
+  const res = await request(`/api/books/author/${userId}`);
+  return res.json();
+}
+
+export async function apiGetSeries(seriesId: number) {
+  const res = await request(`/api/books/series/${seriesId}`);
+  return res.json();
+}
+
+export async function apiUpdateSeries(seriesId: number, data: { name?: string; cover_image?: string; common_genres?: string }) {
+  const res = await request(`/api/books/series/${seriesId}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export async function apiReorderSeriesBooks(seriesId: number, bookIds: number[]) {
+  const res = await request(`/api/books/series/${seriesId}/order`, {
+    method: "PUT",
+    body: JSON.stringify({ book_ids: bookIds }),
+  });
+  return res.json();
+}
+
+export async function apiUploadSeriesCover(seriesId: number, file: File) {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await request(`/api/books/series/${seriesId}/cover`, {
+    method: "POST",
+    body: form,
+  });
+  return res.json();
 }
 

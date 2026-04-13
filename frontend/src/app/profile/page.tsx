@@ -8,13 +8,70 @@ import {
   apiMyBooks, apiUploadBook, apiDeleteBook, apiToggleVisibility,
   apiGetBookStructured, apiUpdateChapter, apiDownloadVblite,
   apiCreateSeries, apiListSeries, apiDeleteSeries, apiAssignToSeries,
-  apiPreviewBook, apiGetMe, apiUploadCover,
+  apiPreviewBook, apiGetMe, apiUploadCover, apiUploadAvatar, apiGetAvatarUrl,
+  apiGetSeries, apiUpdateSeries, apiReorderSeriesBooks, apiUploadSeriesCover,
+  apiGetSeriesCoverUrl,
 } from "@/lib/api";
 import { GENRES, getGenresByLetter, searchGenres } from "@/lib/genres";
 
 const ITEMS_PER_PAGE = 30;
 const RUSSIAN_ALPHABET = "АБВГДЕЁЖЗИКЛМНОПРСТУФХЦЧШЩЭЮЯ".split("");
 const ENGLISH_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+
+interface Book {
+  id: number;
+  title: string;
+  filename: string;
+  sha256: string;
+  is_public: boolean;
+  owner_id: number;
+  owner_username: string;
+  has_structure: boolean;
+  series_ids: number[];
+  series_names: string[];
+  cover_image: string | null;
+  genres: string | null;
+  description: string | null;
+  comment_count: number;
+}
+
+interface Chapter {
+  id: number | string;
+  title: string;
+  paragraphs: string[];
+  order_index?: number;
+}
+
+interface Series {
+  id: number;
+  name: string;
+  book_count: number;
+  cover_image: string | null;
+}
+
+const btn = (bg: string, color: string, extra?: React.CSSProperties): React.CSSProperties => ({
+  padding: "6px 14px",
+  borderRadius: 8,
+  border: "none",
+  background: bg,
+  color,
+  fontSize: 13,
+  fontWeight: 500,
+  cursor: "pointer",
+  ...extra,
+});
+
+const pill = (active: boolean): React.CSSProperties => ({
+  padding: "5px 14px",
+  borderRadius: 16,
+  border: "1px solid var(--border)",
+  background: active ? "var(--accent)" : "transparent",
+  color: active ? "#fff" : "var(--text-secondary)",
+  fontSize: 12,
+  fontWeight: 500,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+});
 
 function GenreModal({ selectedGenres, onSave, onClose }: { selectedGenres: string[]; onSave: (g: string[]) => void; onClose: () => void }) {
   const [search, setSearch] = useState("");
@@ -135,62 +192,6 @@ function GenreModal({ selectedGenres, onSave, onClose }: { selectedGenres: strin
   );
 }
 
-export const dynamic = "force-dynamic";
-
-interface Book {
-  id: number;
-  title: string;
-  filename: string;
-  sha256: string;
-  is_public: boolean;
-  owner_id: number;
-  owner_username: string;
-  has_structure: boolean;
-  series_ids: number[];
-  series_names: string[];
-  cover_image: string | null;
-  genres: string | null;
-  description: string | null;
-  comment_count: number;
-}
-
-interface Chapter {
-  id: number | string;
-  title: string;
-  paragraphs: string[];
-  order_index?: number;
-}
-
-interface Series {
-  id: number;
-  name: string;
-  book_count: number;
-}
-
-const btn = (bg: string, color: string, extra?: React.CSSProperties): React.CSSProperties => ({
-  padding: "6px 14px",
-  borderRadius: 8,
-  border: "none",
-  background: bg,
-  color,
-  fontSize: 13,
-  fontWeight: 500,
-  cursor: "pointer",
-  ...extra,
-});
-
-const pill = (active: boolean): React.CSSProperties => ({
-  padding: "5px 14px",
-  borderRadius: 16,
-  border: "1px solid var(--border)",
-  background: active ? "var(--accent)" : "transparent",
-  color: active ? "#fff" : "var(--text-secondary)",
-  fontSize: 12,
-  fontWeight: 500,
-  cursor: "pointer",
-  whiteSpace: "nowrap",
-});
-
 export default function ProfilePage() {
   const router = useRouter();
   const [books, setBooks] = useState<Book[]>([]);
@@ -199,6 +200,8 @@ export default function ProfilePage() {
   const [error, setError] = useState("");
   const [user, setUserState] = useState<any>(null);
   const [theme, setThemeState] = useState("light");
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
   const [filter, setFilter] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const localFileInputRef = useRef<HTMLInputElement>(null);
@@ -206,6 +209,11 @@ export default function ProfilePage() {
   const [activeTab, setActiveTab] = useState<"all" | "series">("all");
   const [seriesList, setSeriesList] = useState<Series[]>([]);
   const [selectedSeries, setSelectedSeries] = useState<number | null>(null);
+  const [seriesDetails, setSeriesDetails] = useState<any>(null);
+  const [seriesLoading, setSeriesLoading] = useState(false);
+  const [seriesCommonGenres, setSeriesCommonGenres] = useState("");
+  const [draggedBook, setDraggedBook] = useState<number | null>(null);
+  const [dragOverBook, setDragOverBook] = useState<number | null>(null);
   const [sortBy, setSortBy] = useState<"title" | "date" | "filename">("date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
@@ -266,6 +274,87 @@ export default function ProfilePage() {
     try {
       setSeriesList(await apiListSeries());
     } catch {}
+  };
+
+  const loadSeriesDetails = async (seriesId: number) => {
+    setSeriesLoading(true);
+    try {
+      const data = await apiGetSeries(seriesId);
+      setSeriesDetails(data);
+      setSeriesCommonGenres(data.common_genres || "");
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setSeriesLoading(false);
+    }
+  };
+
+  const handleSelectSeries = async (seriesId: number) => {
+    if (selectedSeries === seriesId) {
+      setSelectedSeries(null);
+      setSeriesDetails(null);
+    } else {
+      setSelectedSeries(seriesId);
+      await loadSeriesDetails(seriesId);
+    }
+  };
+
+  const handleSeriesCoverUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.[0] || !selectedSeries) return;
+    try {
+      await apiUploadSeriesCover(selectedSeries, e.target.files[0]);
+      await loadSeriesDetails(selectedSeries);
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
+  const handleSaveCommonGenres = async () => {
+    if (!selectedSeries) return;
+    try {
+      await apiUpdateSeries(selectedSeries, { common_genres: seriesCommonGenres });
+      await loadSeriesDetails(selectedSeries);
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
+  const handleDragStart = (bookId: number) => {
+    setDraggedBook(bookId);
+  };
+
+  const handleDragOver = (e: React.DragEvent, bookId: number) => {
+    e.preventDefault();
+    if (bookId !== draggedBook) {
+      setDragOverBook(bookId);
+    }
+  };
+
+  const handleDragLeave = () => {
+    setDragOverBook(null);
+  };
+
+  const handleDrop = async (targetBookId: number) => {
+    if (!selectedSeries || !seriesDetails?.books || draggedBook === null) return;
+    
+    const books = [...seriesDetails.books];
+    const fromIdx = books.findIndex((b: any) => b.id === draggedBook);
+    const toIdx = books.findIndex((b: any) => b.id === targetBookId);
+    
+    if (fromIdx === -1 || toIdx === -1) return;
+    
+    const [moved] = books.splice(fromIdx, 1);
+    books.splice(toIdx, 0, moved);
+    
+    const bookIds = books.map((b: any) => b.id);
+    try {
+      await apiReorderSeriesBooks(selectedSeries, bookIds);
+      await loadSeriesDetails(selectedSeries);
+    } catch (err: any) {
+      setError(err.message);
+    }
+    setDraggedBook(null);
+    setDragOverBook(null);
   };
 
   const handleUploadClick = () => {
@@ -506,6 +595,16 @@ export default function ProfilePage() {
     );
   }
 
+  const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.[0]) return;
+    try {
+      await apiUploadAvatar(e.target.files[0]);
+      setAvatarUrl(apiGetAvatarUrl(user.id) + "?t=" + Date.now());
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg-primary)" }}>
       {/* Nav */}
@@ -516,7 +615,17 @@ export default function ProfilePage() {
           <span style={{ fontSize: 14, fontWeight: 500, color: "var(--text-primary)" }}>Мои книги</span>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>{user?.username} ({user?.role})</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }} onClick={() => avatarInputRef.current?.click()} title="Загрузить аватар">
+            {avatarUrl ? (
+              <img src={avatarUrl} alt="" style={{ width: 32, height: 32, borderRadius: "50%", objectFit: "cover", cursor: "pointer" }} />
+            ) : (
+              <div style={{ width: 32, height: 32, borderRadius: "50%", background: "orange", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 14, fontWeight: 600, color: "#fff" }}>
+                {user?.username ? user.username[0].toUpperCase() : "?"}
+              </div>
+            )}
+            <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>{user?.username} ({user?.role})</span>
+          </div>
+          <input ref={avatarInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleAvatarUpload} />
           <Link href="/public" style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--text-secondary)", textDecoration: "none", fontSize: 13 }}>Публичная библиотека</Link>
            <button onClick={toggleTheme} style={{ width: 36, height: 36, borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-secondary)", cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>
              {theme === "light" ? "🌙" : "☀"}
@@ -572,29 +681,127 @@ export default function ProfilePage() {
         )}
 
         {/* Series sub-tabs */}
-        {activeTab === "series" && (
-          <div style={{ marginBottom: 16, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-            <button onClick={handleCreateSeries} style={pill(false)}>+ Создать серию</button>
+        {activeTab === "series" && !selectedSeries && (
+          <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
+            <button onClick={handleCreateSeries} style={{ padding: "10px 20px", borderRadius: 8, border: "none", background: "var(--accent)", color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>+ Создать серию</button>
+          </div>
+        )}
+
+        {activeTab === "series" && !selectedSeries && seriesList.length > 0 && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 20 }}>
             {seriesList.map((s) => (
-              <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <button
-                  onClick={() => setSelectedSeries(selectedSeries === s.id ? null : s.id)}
-                  style={pill(selectedSeries === s.id)}
-                >
-                  {s.name} ({s.book_count})
-                </button>
-                <button
-                  onClick={() => handleDeleteSeries(s.id, s.name)}
-                  style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}
-                  title="Удалить серию"
-                >
-                  ×
-                </button>
+              <div key={s.id} onClick={() => handleSelectSeries(s.id)} style={{ cursor: "pointer", borderRadius: 12, overflow: "hidden", border: "1px solid var(--border)", background: "var(--bg-secondary)", transition: "transform 0.15s, box-shadow 0.15s" }}
+                onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-4px)"; e.currentTarget.style.boxShadow = "0 8px 20px rgba(0,0,0,0.12)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "none"; }}
+              >
+                <div style={{ aspectRatio: "2/3", background: "var(--bg-tertiary)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  {s.cover_image ? (
+                    <img src={apiGetSeriesCoverUrl(s.id)} alt={s.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  ) : (
+                    <span style={{ fontSize: 40 }}>📚</span>
+                  )}
+                </div>
+                <div style={{ padding: "10px 12px" }}>
+                  <p style={{ fontSize: 13, fontWeight: 500, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.name}</p>
+                  <p style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>{s.book_count} книг</p>
+                </div>
               </div>
             ))}
-            {seriesList.length === 0 && (
-              <span style={{ fontSize: 13, color: "var(--text-muted)" }}>Нет серий</span>
-            )}
+          </div>
+        )}
+
+        {activeTab === "series" && seriesList.length === 0 && (
+          <div style={{ textAlign: "center", padding: "40px 0", color: "var(--text-muted)" }}>
+            <div style={{ fontSize: 48, marginBottom: 12 }}>📂</div>
+            <p style={{ fontSize: 16 }}>Пока нет серий</p>
+            <p style={{ fontSize: 14, marginTop: 8 }}>Создайте серию для группировки книг</p>
+          </div>
+        )}
+
+        {/* Back to series list button */}
+        {activeTab === "series" && selectedSeries && (
+          <button onClick={() => { setSelectedSeries(null); setSeriesDetails(null); }} style={{ marginBottom: 16, padding: "8px 16px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-secondary)", color: "var(--text-secondary)", cursor: "pointer", fontSize: 13 }}>
+            ← К списку серий
+          </button>
+        )}
+
+        {/* Series Details Panel */}
+        {activeTab === "series" && selectedSeries && seriesDetails && (
+          <div style={{ marginBottom: 24, padding: 20, borderRadius: 12, border: "1px solid var(--border)", background: "var(--bg-secondary)" }}>
+            <div style={{ display: "flex", gap: 16, marginBottom: 16 }}>
+              <div style={{ width: 120, flexShrink: 0, position: "relative" }}>
+                <div style={{ aspectRatio: "2/3", borderRadius: 8, overflow: "hidden", border: "1px solid var(--border)", background: "var(--bg-tertiary)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  {seriesDetails.cover_image ? (
+                    <img src={`/api/books/series/${selectedSeries}/cover`} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  ) : (
+                    <span style={{ fontSize: 32 }}>📚</span>
+                  )}
+                </div>
+                <label style={{ position: "absolute", bottom: 4, right: 4, background: "var(--accent)", color: "#fff", padding: "4px 8px", borderRadius: 4, fontSize: 10, cursor: "pointer" }}>
+                  📷
+                  <input type="file" accept="image/*" style={{ display: "none" }} onChange={handleSeriesCoverUpload} />
+                </label>
+              </div>
+              <div style={{ flex: 1 }}>
+                <h3 style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>{seriesDetails.name}</h3>
+                <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>{seriesDetails.books?.length || 0} книг</p>
+                <div>
+                  <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>Общие жанры</label>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <input
+                      value={seriesCommonGenres}
+                      onChange={(e) => setSeriesCommonGenres(e.target.value)}
+                      placeholder="Фэнтези, Романтика, Боевик"
+                      style={{ flex: 1, padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: 13 }}
+                    />
+                    <button onClick={handleSaveCommonGenres} style={{ padding: "8px 16px", borderRadius: 6, background: "var(--accent)", color: "#fff", border: "none", fontSize: 12, cursor: "pointer" }}>Сохранить</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>Перетащите книги для изменения порядка:</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {seriesDetails.books?.map((book: any, idx: number) => {
+                const isDragging = draggedBook === book.id;
+                const isDragOver = dragOverBook === book.id;
+                return (
+                <div
+                  key={book.id}
+                  draggable
+                  onDragStart={() => handleDragStart(book.id)}
+                  onDragOver={(e) => handleDragOver(e, book.id)}
+                  onDragLeave={handleDragLeave}
+                  onDrop={() => handleDrop(book.id)}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 12,
+                    padding: "8px 12px", borderRadius: 8,
+                    border: isDragging ? "2px solid var(--accent)" : isDragOver ? "2px dashed var(--accent)" : "1px solid var(--border)",
+                    background: isDragOver ? "var(--accent-light)" : "var(--bg-primary)",
+                    cursor: "grab",
+                    opacity: isDragging ? 0.5 : 1,
+                    transition: "border 0.15s, background 0.15s",
+                    position: "relative",
+                  }}
+                >
+                  {isDragOver && !isDragging && (
+                    <div style={{ position: "absolute", left: 0, right: 0, top: -2, height: 2, background: "var(--accent)", borderRadius: 1 }} />
+                  )}
+                  {isDragOver && !isDragging && (
+                    <div style={{ position: "absolute", left: 0, right: 0, bottom: -2, height: 2, background: "var(--accent)", borderRadius: 1 }} />
+                  )}
+                  <span style={{ width: 24, textAlign: "center", fontSize: 14, fontWeight: 600, color: "var(--text-muted)" }}>{idx + 1}</span>
+                  <div style={{ width: 40, height: 56, borderRadius: 4, overflow: "hidden", background: "var(--bg-tertiary)", flexShrink: 0 }}>
+                    {book.cover_image ? (
+                      <img src={`/api/books/${book.id}/cover`} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    ) : (
+                      <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>📖</div>
+                    )}
+                  </div>
+                  <span style={{ fontSize: 13, color: "var(--text-primary)" }}>{book.title}</span>
+                </div>
+              )})}
+            </div>
           </div>
         )}
 

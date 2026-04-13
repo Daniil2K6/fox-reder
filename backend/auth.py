@@ -32,12 +32,14 @@ class Token(BaseModel):
     username: str
     role: str
     id: int
+    is_plus: bool = False
 
 
 class UserOut(BaseModel):
     id: int
     username: str
     role: str
+    is_plus: bool = False
     created_at: datetime
     preferred_voice: str = "default"
     preferred_language: str = "ru"
@@ -120,6 +122,7 @@ def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get
         username=user.username,
         role=user.role,
         id=user.id,
+        is_plus=user.is_plus,
     )
 
 
@@ -129,10 +132,44 @@ def me(user: User = Depends(require_user)):
         "id": user.id,
         "username": user.username,
         "role": user.role,
+        "is_plus": user.is_plus,
         "created_at": user.created_at,
         "preferred_voice": user.preferred_voice or "default",
         "preferred_language": user.preferred_language or "ru",
     }
+
+
+@router.put("/user/{user_id}/role")
+def set_user_role(
+    user_id: int,
+    payload: dict,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    target_user = db.query(User).filter(User.id == user_id).first()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    new_role = payload.get("role", "user")
+    if new_role not in ("user", "admin"):
+        raise HTTPException(status_code=400, detail="Invalid role")
+    target_user.role = new_role
+    db.commit()
+    return {"id": target_user.id, "username": target_user.username, "role": target_user.role, "is_plus": target_user.is_plus}
+
+
+@router.put("/user/{user_id}/plus")
+def toggle_user_plus(
+    user_id: int,
+    payload: dict,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    target_user = db.query(User).filter(User.id == user_id).first()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    target_user.is_plus = payload.get("is_plus", False)
+    db.commit()
+    return {"id": target_user.id, "username": target_user.username, "role": target_user.role, "is_plus": target_user.is_plus}
 
 @router.put("/voice")
 def set_voice_preference(

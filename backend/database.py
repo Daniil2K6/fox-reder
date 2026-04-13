@@ -15,7 +15,8 @@ book_series_association = Table(
     'book_series',
     Base.metadata,
     Column('book_id', Integer, ForeignKey('books.id', ondelete='CASCADE'), primary_key=True),
-    Column('series_id', Integer, ForeignKey('series.id', ondelete='CASCADE'), primary_key=True)
+    Column('series_id', Integer, ForeignKey('series.id', ondelete='CASCADE'), primary_key=True),
+    Column('order_index', Integer, default=0)
 )
 
 
@@ -26,13 +27,18 @@ class User(Base):
     username = Column(String(64), unique=True, nullable=False, index=True)
     hashed_password = Column(String(256), nullable=False)
     role = Column(String(16), default="user", nullable=False)
+    is_plus = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     preferred_voice = Column(String(32), default="ru", nullable=True)
     preferred_language = Column(String(32), default="ru", nullable=True)
+    avatar_url = Column(String(512), nullable=True)
 
     books = relationship("Book", back_populates="owner")
     series = relationship("Series", back_populates="owner")
     comments = relationship("Comment", back_populates="user")
+    likes = relationship("Like", back_populates="user", cascade="all, delete-orphan")
+    subscriptions = relationship("Subscription", foreign_keys="Subscription.subscriber_id", back_populates="subscriber", cascade="all, delete-orphan")
+    notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
 
 
 class Series(Base):
@@ -42,6 +48,8 @@ class Series(Base):
     name = Column(String(256), nullable=False)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+    cover_image = Column(String(512), nullable=True)
+    common_genres = Column(String(512), nullable=True)
 
     owner = relationship("User", back_populates="series")
     books = relationship("Book", secondary=book_series_association, back_populates="series_list")
@@ -64,14 +72,62 @@ class Book(Base):
      description = Column(Text, nullable=True)
      original_language = Column(String(16), default="en", nullable=False)  # ISO 639-1 (en, ru, ja, etc.)
      is_translated = Column(Boolean, default=False)  # Флаг: содержит ли переводы
+     view_count = Column(Integer, default=0)
 
      owner = relationship("User", back_populates="books")
      series_list = relationship("Series", secondary=book_series_association, back_populates="books")
      comments = relationship("Comment", back_populates="book", cascade="all, delete-orphan")
+     likes = relationship("Like", back_populates="book", cascade="all, delete-orphan")
 
      __table_args__ = (
          UniqueConstraint("owner_id", "sha256", name="uq_owner_sha256"),
      )
+
+
+class Like(Base):
+    __tablename__ = "likes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="likes")
+    book = relationship("Book", back_populates="likes")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "book_id", name="uq_user_book_like"),
+    )
+
+
+class Subscription(Base):
+    __tablename__ = "subscriptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    subscriber_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    author_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    subscriber = relationship("User", foreign_keys=[subscriber_id], back_populates="subscriptions")
+    author = relationship("User", foreign_keys=[author_id])
+
+    __table_args__ = (
+        UniqueConstraint("subscriber_id", "author_id", name="uq_subscriber_author"),
+    )
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    type = Column(String(32), nullable=False)
+    message = Column(Text, nullable=False)
+    link = Column(String(256), nullable=True)
+    is_read = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="notifications")
 
 
 class Comment(Base):
@@ -98,6 +154,12 @@ def init_db():
         "ALTER TABLE books ADD COLUMN description TEXT",
         "ALTER TABLE books ADD COLUMN original_language VARCHAR(16) DEFAULT 'en'",
         "ALTER TABLE books ADD COLUMN is_translated BOOLEAN DEFAULT 0",
+        "ALTER TABLE books ADD COLUMN view_count INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN avatar_url VARCHAR(512)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_owner_sha256 ON books(owner_id, sha256)",
+        "ALTER TABLE series ADD COLUMN cover_image VARCHAR(512)",
+        "ALTER TABLE series ADD COLUMN common_genres VARCHAR(512)",
+        "ALTER TABLE book_series ADD COLUMN order_index INTEGER DEFAULT 0",
         # FTS for multilingual search
         "CREATE VIRTUAL TABLE IF NOT EXISTS books_fts USING fts5(title, description, genres, original_language, content=books, content_rowid=id)",
     ]
@@ -107,7 +169,6 @@ def init_db():
                 conn.execute(text(sql))
             except Exception:
                 pass
-        conn.commit()
         conn.commit()
 
 
