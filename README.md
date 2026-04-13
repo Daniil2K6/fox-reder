@@ -18,10 +18,25 @@
 
 Требования: **Python 3.12+**, **Node.js 18+**.
 
+### Linux / macOS
+
 ```bash
 chmod +x run.sh
 ./run.sh --dev
 ```
+
+### Windows
+
+Дважды кликните по файлу `start.bat` или запустите из командной строки:
+
+```cmd
+start.bat start
+```
+
+Команды:
+- `start.bat start` — запуск
+- `start.bat stop` — остановка
+- `start.bat restart` — перезапуск
 
 - Фронтенд: [http://localhost:3000](http://localhost:3000)
 - API (документация Swagger): [http://localhost:8000/docs](http://localhost:8000/docs)
