@@ -21,6 +21,8 @@ import {
   apiUnsubscribe,
   apiMySubscriptions,
   apiIncrementView,
+  apiAssignToSeries,
+  apiListSeries,
 } from "@/lib/api";
 import { GenreSelector } from "@/components/GenreSelector";
 
@@ -39,6 +41,9 @@ export default function BookPage({ params }: { params: { id: string } }) {
   const [editDescription, setEditDescription] = useState("");
   const [showGenreModal, setShowGenreModal] = useState(false);
   const [subscribedAuthors, setSubscribedAuthors] = useState<Set<number>>(new Set());
+  const [showSeriesModal, setShowSeriesModal] = useState(false);
+  const [bookSeries, setBookSeries] = useState<number[]>([]);
+  const [allSeries, setAllSeries] = useState<any[]>([]);
 
   useEffect(() => {
     loadData();
@@ -68,6 +73,7 @@ export default function BookPage({ params }: { params: { id: string } }) {
       setBook(b);
       setEditGenres(b.genres ? b.genres.split(",").map((g: string) => g.trim()).filter((g: string) => g) : []);
       setEditDescription(b.description || "");
+      setBookSeries(b.series_ids || []);
       const c = await apiGetComments(bookId);
       setComments(c);
       
@@ -77,6 +83,11 @@ export default function BookPage({ params }: { params: { id: string } }) {
         const subSet = new Set<number>();
         subs.forEach((s: any) => subSet.add(s.author_id));
         setSubscribedAuthors(subSet);
+        
+        if (u.id === b.owner_id) {
+          const seriesList = await apiListSeries();
+          setAllSeries(seriesList);
+        }
       }
     } catch (err: any) {
       setError(err.message);
@@ -214,6 +225,22 @@ export default function BookPage({ params }: { params: { id: string } }) {
           )}
           <div style={{ marginTop: 16 }}>
             <h1 style={{ fontSize: 24, fontWeight: 700, color: "var(--text-primary)", marginBottom: 8 }}>{book?.title}</h1>
+            {isOwner && (
+              <div style={{ marginBottom: 12 }}>
+                <button onClick={() => setShowSeriesModal(true)} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-tertiary)", color: "var(--text-secondary)", fontSize: 12, cursor: "pointer" }}>
+                  📚 Изменить серию
+                </button>
+              </div>
+            )}
+            {book?.series_names && book.series_names.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                {book.series_names.map((s: string, idx: number) => (
+                  <Link key={idx} href={`/series/${book.series_ids[idx]}`} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--accent)", background: "var(--accent-light)", padding: "4px 10px", borderRadius: 12, marginRight: 8, textDecoration: "none" }}>
+                    📚 {s}
+                  </Link>
+                ))}
+              </div>
+            )}
             <p style={{ color: "var(--text-secondary)", marginBottom: 4 }}>Формат: {book?.filename.split('.').pop()?.toLowerCase() ? '.' + book?.filename.split('.').pop()?.toLowerCase() : ''}</p>
             <p style={{ color: "var(--text-secondary)", marginBottom: 4 }}>Владелец: {book?.owner_username}</p>
             <p style={{ color: "var(--text-secondary)", marginBottom: 8 }}>Главы: {book?.has_structure ? "Да" : "Нет"}</p>
@@ -301,6 +328,33 @@ export default function BookPage({ params }: { params: { id: string } }) {
 
       {showGenreModal && (
         <GenreSelector selectedGenres={editGenres} onSave={(g) => { setEditGenres(g); setShowGenreModal(false); }} onClose={() => setShowGenreModal(false)} />
+      )}
+
+      {showSeriesModal && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+          <div style={{ background: "var(--bg-secondary)", padding: 24, borderRadius: 12, width: "90%", maxWidth: 400 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <h2 style={{ fontSize: 18, fontWeight: 600 }}>Выбрать серию</h2>
+              <button onClick={() => setShowSeriesModal(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "var(--text-muted)" }}>✕</button>
+            </div>
+            <div style={{ maxHeight: 300, overflowY: "auto" }}>
+              {allSeries.map((s) => (
+                <label key={s.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderRadius: 8, border: bookSeries.includes(s.id) ? "1px solid var(--accent)" : "1px solid var(--border)", background: bookSeries.includes(s.id) ? "var(--accent-light)" : "transparent", cursor: "pointer", marginBottom: 4 }}>
+                  <input type="checkbox" checked={bookSeries.includes(s.id)} onChange={(e) => {
+                    const next = new Set(bookSeries);
+                    if (e.target.checked) next.add(s.id);
+                    else next.delete(s.id);
+                    setBookSeries(Array.from(next));
+                  }} />
+                  <span style={{ fontSize: 14, color: "var(--text-primary)" }}>{s.name}</span>
+                  <span style={{ fontSize: 11, color: "var(--text-muted)", marginLeft: "auto" }}>{s.book_count} книг</span>
+                </label>
+              ))}
+              {allSeries.length === 0 && <p style={{ color: "var(--text-muted)", textAlign: "center" }}>Нет серий</p>}
+            </div>
+            <button onClick={async () => { await apiAssignToSeries(bookId, bookSeries); loadData(); setShowSeriesModal(false); }} style={{ marginTop: 16, width: "100%", padding: "10px", borderRadius: 8, background: "var(--accent)", color: "#fff", border: "none", cursor: "pointer" }}>Сохранить</button>
+          </div>
+        </div>
       )}
     </div>
   );

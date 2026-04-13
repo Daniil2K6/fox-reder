@@ -265,6 +265,15 @@ export default function PublicLibraryPage() {
                     </div>
                     <div style={{ padding: "10px 12px" }}>
                       <p style={{ fontSize: 13, fontWeight: 500, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{book.title}</p>
+                      {book.series_names && book.series_names.length > 0 && (
+                        <div style={{ marginTop: 4 }}>
+                          {book.series_names.map((s: string, idx: number) => (
+                            <Link key={idx} href={`/series/${book.series_ids[idx]}`} onClick={(e) => e.stopPropagation()} style={{ display: "inline-block", fontSize: 10, color: "var(--accent)", background: "var(--accent-light)", padding: "2px 6px", borderRadius: 4, marginRight: 4, textDecoration: "none" }}>
+                              📚 {s}
+                            </Link>
+                          ))}
+                        </div>
+                      )}
                       <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
                         {book.owner_avatar ? (
                           <img src={apiGetAvatarUrl(book.owner_id)} alt="" style={{ width: 20, height: 20, borderRadius: "50%", objectFit: "cover" }} />
