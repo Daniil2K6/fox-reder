@@ -28,6 +28,7 @@ class User(Base):
     hashed_password = Column(String(256), nullable=False)
     role = Column(String(16), default="user", nullable=False)
     is_plus = Column(Boolean, default=False, nullable=False)
+    is_banned = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     preferred_voice = Column(String(32), default="ru", nullable=True)
     preferred_language = Column(String(32), default="ru", nullable=True)

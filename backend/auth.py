@@ -33,6 +33,7 @@ class Token(BaseModel):
     role: str
     id: int
     is_plus: bool = False
+    is_banned: bool = False
 
 
 class UserOut(BaseModel):
@@ -40,6 +41,7 @@ class UserOut(BaseModel):
     username: str
     role: str
     is_plus: bool = False
+    is_banned: bool = False
     created_at: datetime
     preferred_voice: str = "default"
     preferred_language: str = "ru"
@@ -115,6 +117,8 @@ def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get
     user = db.query(User).filter(User.username == form.username).first()
     if not user or not verify_password(form.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    if user.is_banned:
+        raise HTTPException(status_code=403, detail="Your account has been banned")
     token = create_access_token({"sub": user.username})
     return Token(
         access_token=token,
@@ -123,6 +127,7 @@ def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get
         role=user.role,
         id=user.id,
         is_plus=user.is_plus,
+        is_banned=user.is_banned,
     )
 
 
@@ -133,6 +138,7 @@ def me(user: User = Depends(require_user)):
         "username": user.username,
         "role": user.role,
         "is_plus": user.is_plus,
+        "is_banned": user.is_banned,
         "created_at": user.created_at,
         "preferred_voice": user.preferred_voice or "default",
         "preferred_language": user.preferred_language or "ru",

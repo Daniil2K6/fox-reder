@@ -1340,3 +1340,179 @@ def get_avatar(
     if not os.path.exists(avatar_path):
         raise HTTPException(status_code=404, detail="Avatar file missing")
     return FileResponse(avatar_path)
+
+
+@router.get("/admin/users")
+def admin_list_users(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    users = db.query(User).order_by(User.id).all()
+    result = []
+    for u in users:
+        book_count = db.query(Book).filter(Book.owner_id == u.id).count()
+        series_count = db.query(Series).filter(Series.owner_id == u.id).count()
+        result.append({
+            "id": u.id,
+            "username": u.username,
+            "role": u.role,
+            "is_plus": u.is_plus,
+            "is_banned": u.is_banned,
+            "created_at": u.created_at.isoformat() if u.created_at else None,
+            "book_count": book_count,
+            "series_count": series_count,
+            "avatar_url": u.avatar_url,
+        })
+    return result
+
+
+@router.get("/admin/books")
+def admin_list_books(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=100),
+    search: Optional[str] = Query(None),
+):
+    query = db.query(Book)
+    if search:
+        query = query.filter(Book.title.ilike(f"%{search}%"))
+    total = query.count()
+    books = query.order_by(Book.id.desc()).offset((page - 1) * limit).limit(limit).all()
+    result = []
+    for b in books:
+        owner = db.query(User).filter(User.id == b.owner_id).first()
+        result.append({
+            "id": b.id,
+            "title": b.title,
+            "filename": b.filename,
+            "owner_id": b.owner_id,
+            "owner_username": owner.username if owner else "Unknown",
+            "is_public": b.is_public,
+            "created_at": b.created_at.isoformat() if b.created_at else None,
+            "cover_image": b.cover_image,
+            "genres": b.genres,
+            "view_count": b.view_count or 0,
+            "like_count": db.query(Like).filter(Like.book_id == b.id).count(),
+            "comment_count": db.query(Comment).filter(Comment.book_id == b.id).count(),
+        })
+    return {"books": result, "total": total, "page": page, "pages": (total + limit - 1) // limit}
+
+
+@router.get("/admin/series")
+def admin_list_series(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    series_list = db.query(Series).order_by(Series.id.desc()).all()
+    result = []
+    for s in series_list:
+        owner = db.query(User).filter(User.id == s.owner_id).first()
+        result.append({
+            "id": s.id,
+            "name": s.name,
+            "owner_id": s.owner_id,
+            "owner_username": owner.username if owner else "Unknown",
+            "book_count": len(s.books),
+            "cover_image": s.cover_image,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+        })
+    return result
+
+
+@router.delete("/admin/book/{book_id}")
+def admin_delete_book(
+    book_id: int,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    if book.file_path and os.path.exists(book.file_path):
+        try:
+            os.remove(book.file_path)
+        except OSError:
+            pass
+    if book.cover_image:
+        cover_path = os.path.join(COVERS_DIR, book.cover_image)
+        if os.path.exists(cover_path):
+            try:
+                os.remove(cover_path)
+            except OSError:
+                pass
+    db.delete(book)
+    db.commit()
+    return {"detail": "Book deleted"}
+
+
+@router.delete("/admin/series/{series_id}")
+def admin_delete_series(
+    series_id: int,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    series = db.query(Series).filter(Series.id == series_id).first()
+    if not series:
+        raise HTTPException(status_code=404, detail="Series not found")
+    if series.cover_image:
+        series_dir = os.path.join(UPLOAD_DIR, "series_covers")
+        cover_path = os.path.join(series_dir, series.cover_image)
+        if os.path.exists(cover_path):
+            try:
+                os.remove(cover_path)
+            except OSError:
+                pass
+    db.delete(series)
+    db.commit()
+    return {"detail": "Series deleted"}
+
+
+@router.put("/admin/user/{user_id}/ban")
+def admin_ban_user(
+    user_id: int,
+    payload: dict,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    if user_id == admin.id:
+        raise HTTPException(status_code=400, detail="Cannot ban yourself")
+    target_user = db.query(User).filter(User.id == user_id).first()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    target_user.is_plus = payload.get("is_plus", target_user.is_plus)
+    target_user.role = payload.get("role", target_user.role)
+    target_user.is_banned = payload.get("is_banned", target_user.is_banned)
+    db.commit()
+    return {"id": target_user.id, "username": target_user.username, "role": target_user.role, "is_plus": target_user.is_plus, "is_banned": target_user.is_banned}
+
+
+@router.delete("/admin/user/{user_id}")
+def admin_delete_user(
+    user_id: int,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    if user_id == admin.id:
+        raise HTTPException(status_code=400, detail="Cannot delete yourself")
+    target_user = db.query(User).filter(User.id == user_id).first()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    db.delete(target_user)
+    db.commit()
+    return {"detail": "User deleted"}
+
+
+@router.put("/admin/book/{book_id}/visibility")
+def admin_toggle_book_visibility(
+    book_id: int,
+    payload: dict,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    book.is_public = payload.get("is_public", not book.is_public)
+    db.commit()
+    return {"id": book.id, "is_public": book.is_public}

@@ -15,8 +15,13 @@ export function clearToken() {
 
 export function getUser() {
   if (typeof window === "undefined") return null;
-  const u = localStorage.getItem("fox_user");
-  return u ? JSON.parse(u) : null;
+  try {
+    const u = localStorage.getItem("fox_user");
+    return u ? JSON.parse(u) : null;
+  } catch {
+    localStorage.removeItem("fox_user");
+    return null;
+  }
 }
 
 export function setUser(user: any) {
@@ -81,6 +86,8 @@ export async function apiLogin(username: string, password: string) {
     id: data.id,
     username: data.username,
     role: data.role,
+    is_plus: data.is_plus || false,
+    is_banned: data.is_banned || false,
   });
   return data;
 }
@@ -101,6 +108,8 @@ export async function apiRegister(username: string, password: string) {
     id: data.id,
     username: data.username,
     role: data.role,
+    is_plus: data.is_plus || false,
+    is_banned: data.is_banned || false,
   });
   return data;
 }
@@ -434,6 +443,54 @@ export async function apiUploadSeriesCover(seriesId: number, file: File) {
   const res = await request(`/api/books/series/${seriesId}/cover`, {
     method: "POST",
     body: form,
+  });
+  return res.json();
+}
+
+export async function apiAdminUsers() {
+  const res = await request("/api/books/admin/users");
+  return res.json();
+}
+
+export async function apiAdminBooks(page: number = 1, limit: number = 50, search?: string) {
+  let url = `/api/books/admin/books?page=${page}&limit=${limit}`;
+  if (search) url += `&search=${encodeURIComponent(search)}`;
+  const res = await request(url);
+  return res.json();
+}
+
+export async function apiAdminSeries() {
+  const res = await request("/api/books/admin/series");
+  return res.json();
+}
+
+export async function apiAdminDeleteBook(bookId: number) {
+  const res = await request(`/api/books/admin/book/${bookId}`, { method: "DELETE" });
+  return res.json();
+}
+
+export async function apiAdminDeleteSeries(seriesId: number) {
+  const res = await request(`/api/books/admin/series/${seriesId}`, { method: "DELETE" });
+  return res.json();
+}
+
+export async function apiAdminBanUser(userId: number, isPlus: boolean, role: string, isBanned: boolean) {
+  const res = await request(`/api/books/admin/user/${userId}/ban`, {
+    method: "PUT",
+    body: JSON.stringify({ is_plus: isPlus, role, is_banned: isBanned }),
+  });
+  return res.json();
+}
+
+export async function apiAdminDeleteUser(userId: number) {
+  const res = await request(`/api/books/admin/user/${userId}`, { method: "DELETE" });
+  return res.json();
+}
+
+export async function apiAdminToggleBookVisibility(bookId: number, isPublic: boolean) {
+  const res = await request(`/api/books/admin/book/${bookId}/visibility`, {
+    method: "PUT",
+    body: JSON.stringify({ is_public: isPublic }),
   });
   return res.json();
 }

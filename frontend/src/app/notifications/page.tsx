@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { getUser, clearToken, clearUser, getTheme, setTheme, apiNotifications, apiMarkRead, apiMarkAllRead, apiUnreadCount } from "@/lib/api";
 import { useRouter } from "next/navigation";
+import { Navbar } from "@/components/Navbar";
 
 interface Notification {
   id: number;
@@ -94,22 +95,10 @@ export default function NotificationsPage() {
   }
 
   return (
-    <div style={{ minHeight: "100vh", background: "var(--bg-primary)" }}>
-      <nav style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 32px", borderBottom: "1px solid var(--border)", background: "var(--bg-secondary)" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <Link href="/" style={{ fontSize: 20, fontWeight: 700, color: "var(--accent)", textDecoration: "none" }}>🦊 FoxBooks</Link>
-          <span style={{ color: "var(--text-muted)" }}>/</span>
-          <span style={{ fontSize: 14, fontWeight: 500, color: "var(--text-primary)" }}>Уведомления</span>
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>{user?.username}</span>
-          <Link href="/profile" style={{ padding: "6px 14px", borderRadius: 8, background: "var(--accent)", color: "#fff", textDecoration: "none", fontSize: 13, fontWeight: 500 }}>Мой профиль</Link>
-          <button onClick={toggleTheme} style={{ width: 36, height: 36, borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-secondary)", cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>{theme === "light" ? "🌙" : "☀"}</button>
-          <button onClick={logout} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--text-secondary)", fontSize: 13, cursor: "pointer" }}>Выход</button>
-        </div>
-      </nav>
+    <div style={{ minHeight: "100vh", background: "var(--bg-primary)", display: "flex", flexDirection: "column" }}>
+      <Navbar activeTab="notifications" />
 
-      <div style={{ maxWidth: 700, margin: "0 auto", padding: "32px 24px" }}>
+      <div style={{ maxWidth: 700, margin: "0 auto", padding: "32px 24px", flex: 1 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
           <h1 style={{ fontSize: 24, fontWeight: 600, color: "var(--text-primary)", margin: 0 }}>Уведомления</h1>
           {notifications.some(n => !n.is_read) && (

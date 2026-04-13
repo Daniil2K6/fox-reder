@@ -13,6 +13,7 @@ import {
   apiGetSeriesCoverUrl,
 } from "@/lib/api";
 import { GENRES, getGenresByLetter, searchGenres } from "@/lib/genres";
+import { Navbar } from "@/components/Navbar";
 
 const ITEMS_PER_PAGE = 30;
 const RUSSIAN_ALPHABET = "АБВГДЕЁЖЗИКЛМНОПРСТУФХЦЧШЩЭЮЯ".split("");
@@ -606,36 +607,9 @@ export default function ProfilePage() {
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: "var(--bg-primary)" }}>
-      {/* Nav */}
-      <nav style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 32px", borderBottom: "1px solid var(--border)", background: "var(--bg-secondary)" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <Link href="/" style={{ fontSize: 20, fontWeight: 700, color: "var(--accent)", textDecoration: "none" }}>🦊 FoxBooks</Link>
-          <span style={{ color: "var(--text-muted)" }}>/</span>
-          <span style={{ fontSize: 14, fontWeight: 500, color: "var(--text-primary)" }}>Мои книги</span>
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }} onClick={() => avatarInputRef.current?.click()} title="Загрузить аватар">
-            {avatarUrl ? (
-              <img src={avatarUrl} alt="" style={{ width: 32, height: 32, borderRadius: "50%", objectFit: "cover", cursor: "pointer" }} />
-            ) : (
-              <div style={{ width: 32, height: 32, borderRadius: "50%", background: "orange", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 14, fontWeight: 600, color: "#fff" }}>
-                {user?.username ? user.username[0].toUpperCase() : "?"}
-              </div>
-            )}
-            <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>{user?.username} ({user?.role})</span>
-          </div>
-          <input ref={avatarInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleAvatarUpload} />
-          <Link href="/public" style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--text-secondary)", textDecoration: "none", fontSize: 13 }}>Публичная библиотека</Link>
-           <button onClick={toggleTheme} style={{ width: 36, height: 36, borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-secondary)", cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>
-             {theme === "light" ? "🌙" : "☀"}
-           </button>
-           <button onClick={handleOpenLocal} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--text-secondary)", fontSize: 13, cursor: "pointer" }}>
-             Локальная книга
-           </button>
-           <button onClick={logout} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--text-secondary)", fontSize: 13, cursor: "pointer" }}>Выход</button>
-        </div>
-      </nav>
+    <div style={{ minHeight: "100vh", background: "var(--bg-primary)", display: "flex", flexDirection: "column" }}>
+      <Navbar activeTab="profile" />
+      
       <input
         ref={localFileInputRef}
         type="file"
@@ -672,7 +646,7 @@ export default function ProfilePage() {
         </div>
       </div>
 
-      <div style={{ maxWidth: 900, margin: "0 auto", padding: "16px 24px 32px" }}>
+      <div style={{ maxWidth: 900, margin: "0 auto", padding: "16px 24px 32px", flex: 1 }}>
         {error && (
           <div style={{ background: "var(--accent-light)", border: "1px solid var(--error)", borderRadius: 10, padding: "10px 14px", marginBottom: 20, color: "var(--error)", fontSize: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             {error}

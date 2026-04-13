@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { getUser, clearToken, clearUser, getTheme, setTheme, apiPublicSeries, apiGetCoverUrl, apiPublicBooksPaginated, apiPublicBooksCount, apiLikeBook, apiUnlikeBook, apiUnreadCount, apiNotifications, apiAuthors, apiSubscribe, apiUnsubscribe, apiGetAvatarUrl, apiHotBooks, apiGetSeriesCoverUrl } from "@/lib/api";
+import { Navbar } from "@/components/Navbar";
 import { useRouter } from "next/navigation";
 
 interface Book {
@@ -21,6 +22,8 @@ interface Book {
   is_liked: boolean;
   view_count: number;
   owner_avatar: string | null;
+  series_ids?: number[];
+  series_names?: string[];
 }
 
 export default function PublicLibraryPage() {
@@ -49,6 +52,13 @@ export default function PublicLibraryPage() {
     const t = getTheme();
     setThemeState(t);
     document.documentElement.setAttribute("data-theme", t);
+    
+    const params = new URLSearchParams(window.location.search);
+    const genreParam = params.get("genre");
+    if (genreParam) {
+      setGenre(genreParam);
+    }
+    
     loadData();
   }, []);
 
@@ -160,36 +170,7 @@ export default function PublicLibraryPage() {
 
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg-primary)" }}>
-      <nav style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 32px", borderBottom: "1px solid var(--border)", background: "var(--bg-secondary)" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <Link href="/" style={{ fontSize: 20, fontWeight: 700, color: "var(--accent)", textDecoration: "none" }}>🦊 FoxBooks</Link>
-          <span style={{ color: "var(--text-muted)" }}>/</span>
-          <span style={{ fontSize: 14, fontWeight: 500, color: "var(--text-primary)" }}>Публичная библиотека</span>
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {user ? (
-            <>
-              <Link href="/notifications" style={{ position: "relative", padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--text-secondary)", textDecoration: "none", fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
-                🔔 {unreadCount > 0 && <span style={{ position: "absolute", top: -4, right: -4, background: "red", color: "white", borderRadius: "50%", fontSize: 10, width: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>{unreadCount}</span>}
-              </Link>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <div style={{ width: 28, height: 28, borderRadius: "50%", background: "orange", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600, color: "#fff" }}>
-                  {user.username[0].toUpperCase()}
-                </div>
-                <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>{user.username}</span>
-              </div>
-              <Link href="/profile" style={{ padding: "6px 14px", borderRadius: 8, background: "var(--accent)", color: "#fff", textDecoration: "none", fontSize: 13, fontWeight: 500 }}>Мой профиль</Link>
-            </>
-          ) : (
-            <>
-              <Link href="/login" style={{ padding: "6px 14px", borderRadius: 8, background: "var(--accent)", color: "#fff", textDecoration: "none", fontSize: 13, fontWeight: 500 }}>Вход</Link>
-              <Link href="/register" style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--text-secondary)", textDecoration: "none", fontSize: 13 }}>Регистрация</Link>
-            </>
-          )}
-          <button onClick={toggleTheme} style={{ width: 36, height: 36, borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-secondary)", cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>{theme === "light" ? "🌙" : "☀"}</button>
-          {user && <button onClick={logout} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--text-secondary)", fontSize: 13, cursor: "pointer" }}>Выход</button>}
-        </div>
-      </nav>
+      <Navbar activeTab="public" />
 
       <div style={{ maxWidth: 1000, margin: "0 auto", padding: "32px 24px" }}>
         <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
@@ -268,7 +249,7 @@ export default function PublicLibraryPage() {
                       {book.series_names && book.series_names.length > 0 && (
                         <div style={{ marginTop: 4 }}>
                           {book.series_names.map((s: string, idx: number) => (
-                            <Link key={idx} href={`/series/${book.series_ids[idx]}`} onClick={(e) => e.stopPropagation()} style={{ display: "inline-block", fontSize: 10, color: "var(--accent)", background: "var(--accent-light)", padding: "2px 6px", borderRadius: 4, marginRight: 4, textDecoration: "none" }}>
+                            <Link key={idx} href={`/series/${book.series_ids![idx]}`} onClick={(e) => e.stopPropagation()} style={{ display: "inline-block", fontSize: 10, color: "var(--accent)", background: "var(--accent-light)", padding: "2px 6px", borderRadius: 4, marginRight: 4, textDecoration: "none" }}>
                               📚 {s}
                             </Link>
                           ))}
@@ -351,11 +332,6 @@ export default function PublicLibraryPage() {
                 </div>
               </Link>
             ))}
-          </div>
-        ) : activeTab === "series" && series.length === 0 ? (
-          <div style={{ textAlign: "center", padding: "60px 0", color: "var(--text-muted)" }}>
-            <div style={{ fontSize: 48, marginBottom: 12 }}>👤</div>
-            <p style={{ fontSize: 16 }}>Пока нет авторов</p>
           </div>
         ) : activeTab === "authors" ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

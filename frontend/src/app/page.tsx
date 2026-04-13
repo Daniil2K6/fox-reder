@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { getUser, clearToken, clearUser, getTheme, setTheme, apiPreviewBook } from "@/lib/api";
+import { Navbar } from "@/components/Navbar";
 
 export default function Home() {
   const router = useRouter();
@@ -57,68 +58,7 @@ export default function Home() {
         flexDirection: "column",
       }}
     >
-      {/* Nav */}
-      <nav
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          padding: "16px 32px",
-          borderBottom: "1px solid var(--border)",
-          background: "var(--bg-secondary)",
-        }}
-      >
-        <span
-          style={{
-            fontSize: 20,
-            fontWeight: 700,
-            color: "var(--accent)",
-            letterSpacing: "-0.02em",
-          }}
-        >
-          🦊 FoxBooks
-        </span>
-        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-          <button
-            onClick={toggleTheme}
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: 8,
-              border: "1px solid var(--border)",
-              background: "var(--bg-secondary)",
-              cursor: "pointer",
-              fontSize: 16,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            {theme === "light" ? "🌙" : "☀"}
-          </button>
-          {user ? (
-            <>
-              <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>
-                {user.username} ({user.role})
-              </span>
-              <button
-                onClick={logout}
-                style={{
-                  padding: "6px 14px",
-                  borderRadius: 8,
-                  border: "1px solid var(--border)",
-                  background: "transparent",
-                  color: "var(--text-secondary)",
-                  fontSize: 13,
-                  cursor: "pointer",
-                }}
-              >
-                Выход
-              </button>
-            </>
-          ) : null}
-        </div>
-      </nav>
+      <Navbar activeTab="home" />
 
       {/* Hero */}
       <div
@@ -164,22 +104,22 @@ export default function Home() {
               marginBottom: 60,
             }}
           >
-            {user ? (
+            {user && user.username ? (
               <>
                  <Link
-                   href="/profile"
-                   style={{
-                     padding: "12px 28px",
-                     borderRadius: 10,
-                     background: "var(--accent)",
-                     color: "#fff",
-                     textDecoration: "none",
-                     fontSize: 15,
-                     fontWeight: 600,
-                   }}
-                 >
-                   Профиль
-                 </Link>
+                  href="/profile"
+                  style={{
+                    padding: "12px 28px",
+                    borderRadius: 10,
+                    background: "var(--accent)",
+                    color: "#fff",
+                    textDecoration: "none",
+                    fontSize: 15,
+                    fontWeight: 600,
+                  }}
+                >
+                  Профиль
+                </Link>
                 <Link
                   href="/public"
                   style={{

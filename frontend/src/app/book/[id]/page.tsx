@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, useMemo } from "react";
+import React, { useEffect, useState, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -23,8 +23,12 @@ import {
   apiIncrementView,
   apiAssignToSeries,
   apiListSeries,
+  apiAdminDeleteBook,
+  apiAdminToggleBookVisibility,
 } from "@/lib/api";
 import { GenreSelector } from "@/components/GenreSelector";
+
+const Navbar = React.lazy(() => import("@/components/Navbar").then(m => ({ default: m.Navbar })));
 
 export default function BookPage({ params }: { params: { id: string } }) {
   const router = useRouter();
@@ -174,13 +178,35 @@ export default function BookPage({ params }: { params: { id: string } }) {
         await apiSubscribe(book.owner_id);
         newSubscribed.add(book.owner_id);
       }
-      setSubscribedAuthors(newSubscribed);
+        setSubscribedAuthors(newSubscribed);
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleAdminToggleVisibility = async () => {
+    if (!user || user.role !== "admin") return;
+    try {
+      await apiAdminToggleBookVisibility(bookId, !book.is_public);
+      setBook((prev: any) => prev ? { ...prev, is_public: !prev.is_public } : null);
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleAdminDeleteBook = async () => {
+    if (!user || user.role !== "admin") return;
+    if (!confirm(`Удалить книгу "${book.title}"?`)) return;
+    try {
+      await apiAdminDeleteBook(bookId);
+      router.push("/public");
     } catch (err: any) {
       alert(err.message);
     }
   };
 
   const user = useMemo(() => getUser(), [userEpoch]);
+  const isAdmin = user?.role === "admin";
   const uid = user?.id != null ? Number(user.id) : null;
   const isOwner = uid !== null && book != null && uid === Number(book.owner_id);
 
@@ -201,14 +227,22 @@ export default function BookPage({ params }: { params: { id: string } }) {
     );
   }
 
-  return (
-    <div style={{ minHeight: "100vh", background: "var(--bg-primary)", padding: 24 }}>
-      <button onClick={() => router.back()} style={{ marginBottom: 16, padding: "6px 12px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-secondary)", cursor: "pointer" }}>← Back</button>
+  const breadcrumbs = [
+    { label: "Библиотека", href: "/public" },
+    ...(book?.series_names?.length ? [{ label: book.series_names[0], href: `/series/${book.series_ids?.[0]}` }] : []),
+    { label: book?.title || "Книга" },
+  ];
 
-      <div style={{ display: "flex", gap: 24, maxWidth: 1000, margin: "0 auto" }}>
-        {/* Left: Cover and metadata */}
-        <div style={{ flex: 1, maxWidth: 400 }}>
-          {book?.cover_image ? (
+  return (
+    <React.Suspense fallback={null}>
+      <Navbar 
+        breadcrumbs={breadcrumbs}
+      />
+      <div style={{ padding: 24 }}>
+        <button onClick={() => router.back()} style={{ marginBottom: 16, padding: "6px 12px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-secondary)", cursor: "pointer" }}>← Back</button>
+        <div style={{ display: "flex", gap: 24, maxWidth: 1000, margin: "0 auto" }}>
+          <div style={{ flex: 1, maxWidth: 400 }}>
+            {book?.cover_image ? (
             <img src={apiGetCoverUrl(bookId) + "?t=" + new Date().getTime()} alt={book.title} style={{ width: "100%", borderRadius: 12, boxShadow: "0 4px 12px rgba(0,0,0,0.1)" }} />
           ) : (
             <div style={{ width: "100%", height: 300, background: "var(--bg-secondary)", borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)" }}>
@@ -253,6 +287,16 @@ export default function BookPage({ params }: { params: { id: string } }) {
                   {subscribedAuthors.has(book?.owner_id) ? "✓ Подписан" : "Подписаться"}
                 </button>
               )}
+              {isAdmin && (
+                <div style={{ display: "flex", gap: 8, marginLeft: 8 }}>
+                  <button onClick={handleAdminToggleVisibility} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid", borderColor: book?.is_public ? "#f59e0b" : "#22c55e", background: "transparent", color: book?.is_public ? "#f59e0b" : "#22c55e", cursor: "pointer", fontSize: 12 }}>
+                    {book?.is_public ? "Скрыть" : "Опубликовать"}
+                  </button>
+                  <button onClick={handleAdminDeleteBook} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #ef4444", background: "transparent", color: "#ef4444", cursor: "pointer", fontSize: 12 }}>
+                    Удалить
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -290,12 +334,14 @@ export default function BookPage({ params }: { params: { id: string } }) {
 
         {/* Right: Content */}
         <div style={{ flex: 1 }}>
-          <div>
+            <div>
             <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>Жанры</h2>
             {book?.genres ? (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                 {book.genres.split(",").map((g: string, i: number) => (
-                  <span key={i} style={{ padding: "4px 10px", borderRadius: 12, background: "var(--accent-light)", color: "var(--accent)", fontSize: 12 }}>{g.trim()}</span>
+                  <Link key={i} href={`/public?genre=${encodeURIComponent(g.trim())}`} style={{ padding: "4px 10px", borderRadius: 12, background: "var(--accent-light)", color: "var(--accent)", fontSize: 12, textDecoration: "none" }}>
+                    {g.trim()}
+                  </Link>
                 ))}
               </div>
             ) : (
@@ -357,5 +403,6 @@ export default function BookPage({ params }: { params: { id: string } }) {
         </div>
       )}
     </div>
+    </React.Suspense>
   );
 }
