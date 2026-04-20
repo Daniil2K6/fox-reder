@@ -35,3 +35,6 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+# WARNING / Plans (personal notes)
+WARNING.md
