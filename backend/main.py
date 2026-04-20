@@ -81,6 +81,7 @@ async def synthesize_speech(
     text = payload.get("text", "")
     language = payload.get("language", "en")
     character = payload.get("character")
+    character_gender = payload.get("character_gender")
     voice_type = payload.get("voice_type", getattr(user, "preferred_voice", "default"))
     if not text:
         raise HTTPException(status_code=400, detail="No text provided")
@@ -90,7 +91,8 @@ async def synthesize_speech(
     try:
         service = get_tts_service()
         audio_bytes = await service.synthesize(
-            text, language=language, character=character, voice_type=voice_type
+            text, language=language, character=character, character_gender=character_gender,
+            voice_type=voice_type
         )
         return StreamingResponse(
             io.BytesIO(audio_bytes),
@@ -106,9 +108,16 @@ async def synthesize_chunk(
     payload: dict,
     user=Depends(get_current_user),
 ):
+    # Сохраняем для отладки
+    import json
+    debug_file = "/tmp/tts_debug.json"
+    with open(debug_file, "w") as f:
+        json.dump(payload, f, ensure_ascii=False)
+    logger.info(f"TTS chunk payload saved to {debug_file}")
     text = payload.get("text", "")
     language = payload.get("language", "en")
     character = payload.get("character")
+    character_gender = payload.get("character_gender")
     voice_type = payload.get("voice_type", getattr(user, "preferred_voice", "default"))
     pitch = payload.get("pitch", 0.0)
     rate = payload.get("rate", 0.0)
@@ -122,8 +131,8 @@ async def synthesize_chunk(
     try:
         service = get_tts_service()
         audio_bytes = await service.synthesize(
-            text, language=language, character=character, voice_type=voice_type,
-            pitch=pitch, rate=rate, volume=volume
+            text, language=language, character=character, character_gender=character_gender,
+            voice_type=voice_type, pitch=pitch, rate=rate, volume=volume
         )
         return StreamingResponse(
             io.BytesIO(audio_bytes),

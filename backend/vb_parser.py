@@ -192,8 +192,11 @@ def parse_vb(file_path: str) -> dict:
             if not text:
                 continue
 
+            character = block.get("character")
+
             ai = block.get("ai", {}) or {}
-            character = ai.get("character")
+            if character is None:
+                character = ai.get("character")
             emotion = ai.get("emotion")
             style = block.get("style", {}) or {}
 

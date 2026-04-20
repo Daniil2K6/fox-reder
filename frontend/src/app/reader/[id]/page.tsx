@@ -31,10 +31,15 @@ interface TocItem {
   index: number;
 }
 
+interface Character {
+  name: string;
+  gender: string;
+}
+
 interface Paragraph {
   id: string;
   text: string;
-  character: string | null;
+  character: string | Character | null;
   bold: boolean;
   italic: boolean;
   color: string | null;
@@ -358,11 +363,14 @@ useEffect(() => {
     setHighlightPara(item.paraIdx);
     setTtsState("loading");
 
-     try {
-const blob = await apiTTSChunkWithCharacter(
+try {
+        const charName = typeof item.character === 'string' ? item.character : item.character?.name;
+        const charGender = typeof item.character === 'object' ? item.character?.gender : undefined;
+        const blob = await apiTTSChunkWithCharacter(
           item.text,
           language,
-          item.character,
+          charName,
+          charGender,
           item.voiceType,
           item.pitch,
           item.rate,
@@ -880,11 +888,11 @@ const paras = visibleParagraphs.slice(paraIdx).filter((p) => p.text.length > 0);
                        transition: "all 0.2s",
                      }}
                    >
-                     {showCharacterLabels && para.character && (
-                       <span style={{ fontWeight: 600, color: "var(--accent)", fontSize: "0.85em", marginRight: 6 }}>
-                         [{para.character}]
-                       </span>
-                     )}
+{showCharacterLabels && para.character && (
+                        <span style={{ fontWeight: 600, color: "var(--accent)", fontSize: "0.85em", marginRight: 6 }}>
+                          [{typeof para.character === 'string' ? para.character : (para.character as any).name}]
+                        </span>
+                      )}
                      {para.text}
                    </div>
                 </div>

@@ -309,9 +309,10 @@ export async function apiSetVoicePreference(voiceType: string, language: string,
   return res.json();
 }
 
-export async function apiTTSChunkWithCharacter(text: string, language: string = "en", character?: string, voiceType?: string, pitch?: number, rate?: number, volume?: number): Promise<Blob> {
+export async function apiTTSChunkWithCharacter(text: string, language: string = "en", character?: string, characterGender?: string, voiceType?: string, pitch?: number, rate?: number, volume?: number): Promise<Blob> {
   const body: any = { text, language };
   if (character) body.character = character;
+  if (characterGender) body.character_gender = characterGender;
   if (voiceType) body.voice_type = voiceType;
   if (pitch !== undefined) body.pitch = pitch;
   if (rate !== undefined) body.rate = rate;

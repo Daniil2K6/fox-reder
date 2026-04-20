@@ -5,23 +5,70 @@ from typing import Optional
 
 logger = logging.getLogger("tts_service")
 
-VOICE_MAP = {
-    "ru": "ru-RU-DmitryNeural",
-    "en": "en-US-GuyNeural",
-    "es": "es-ES-AlvaroNeural",
-    "fr": "fr-FR-HenriNeural",
-    "de": "de-DE-ConradNeural",
-    "it": "it-IT-DiegoNeural",
-    "pt": "pt-BR-AntonioNeural",
-    "ja": "ja-JP-KeitaNeural",
-    "zh": "zh-CN-YunxiNeural",
-    "ko": "ko-KR-InJoonNeural",
-    "pl": "pl-PL-MarekNeural",
-    "tr": "tr-TR-AhmetNeural",
+# ============================================================================
+# ГОЛОСА ПО ПЕРВЫМ БУКВАМ ИМЕНИ ПЕРСОНАЖА
+# ============================================================================
+# Женские голоса (А-Е)
+VOICE_GROUPS = {
+    "А": {"voice": "ru-RU-SvetlanaNeural", "gender": "female", "name": "Анна (жен)"},
+    "Б": {"voice": "ru-RU-SvetlanaNeural", "gender": "female", "name": "Белла (жен)"},
+    "В": {"voice": "ru-RU-SvetlanaNeural", "gender": "female", "name": "Валентина (жен)"},
+    "Г": {"voice": "ru-RU-SvetlanaNeural", "gender": "female", "name": "Галина (жен)"},
+    "Д": {"voice": "ru-RU-SvetlanaNeural", "gender": "female", "name": "Дарья (жен)"},
+    "Е": {"voice": "ru-RU-SvetlanaNeural", "gender": "female", "name": "Елена (жен)"},
+    
+    # Женские голоса (Ё-Л)
+    "Ё": {"voice": "ru-RU-SvetlanaNeural", "gender": "female", "name": "Ёлка (жен)"},
+    "Ж": {"voice": "ru-RU-SvetlanaNeural", "gender": "female", "name": "Жанна (жен)"},
+    "З": {"voice": "ru-RU-SvetlanaNeural", "gender": "female", "name": "Зинаида (жен)"},
+    "И": {"voice": "ru-RU-SvetlanaNeural", "gender": "female", "name": "Ирина (жен)"},
+    "К": {"voice": "ru-RU-SvetlanaNeural", "gender": "female", "name": "Клавдия (жен)"},
+    "Л": {"voice": "ru-RU-SvetlanaNeural", "gender": "female", "name": "Людмила (жен)"},
+    
+    # Мужские голоса (М-Р)
+    "М": {"voice": "ru-RU-DmitryNeural", "gender": "male", "name": "Михаил (муж)"},
+    "Н": {"voice": "ru-RU-DmitryNeural", "gender": "male", "name": "Николай (муж)"},
+    "О": {"voice": "ru-RU-DmitryNeural", "gender": "male", "name": "Олег (муж)"},
+    "П": {"voice": "ru-RU-DmitryNeural", "gender": "male", "name": "Пётр (муж)"},
+    "Р": {"voice": "ru-RU-DmitryNeural", "gender": "male", "name": "Роман (муж)"},
+    
+    # Мужские голоса (С-Я)
+    "С": {"voice": "ru-RU-DmitryNeural", "gender": "male", "name": "Сергей (муж)"},
+    "Т": {"voice": "ru-RU-DmitryNeural", "gender": "male", "name": "Тимофей (муж)"},
+    "У": {"voice": "ru-RU-DmitryNeural", "gender": "male", "name": "Универсальный (муж)"},
+    "Ф": {"voice": "ru-RU-DmitryNeural", "gender": "male", "name": "Фёдор (муж)"},
+    "Х": {"voice": "ru-RU-DmitryNeural", "gender": "male", "name": "Харитон (муж)"},
+    "Ц": {"voice": "ru-RU-DmitryNeural", "gender": "male", "name": "Цезарь (муж)"},
+    "Ч": {"voice": "ru-RU-DmitryNeural", "gender": "male", "name": "Чеслав (муж)"},
+    "Ш": {"voice": "ru-RU-DmitryNeural", "gender": "male", "name": "Шандор (муж)"},
+    "Щ": {"voice": "ru-RU-DmitryNeural", "gender": "male", "name": "Щукин (муж)"},
+    "Ъ": {"voice": "ru-RU-DmitryNeural", "gender": "male", "name": "Твердый (муж)"},
+    "Ы": {"voice": "ru-RU-DmitryNeural", "gender": "male", "name": "Ышный (муж)"},
+    "Ь": {"voice": "ru-RU-DmitryNeural", "gender": "male", "name": "Мягкий (муж)"},
+    "Э": {"voice": "ru-RU-DmitryNeural", "gender": "male", "name": "Эдуард (муж)"},
+    "Ю": {"voice": "ru-RU-DmitryNeural", "gender": "male", "name": "Юрий (муж)"},
+    "Я": {"voice": "ru-RU-DmitryNeural", "gender": "male", "name": "Ярослав (муж)"},
 }
 
-DEFAULT_VOICE = "en-US-GuyNeural"
+def get_voice_by_first_letter(letter: str) -> dict:
+    """Получить голос по первой букве имени персонажа"""
+    if not letter:
+        return {"voice": "ru-RU-DmitryNeural", "gender": "male", "name": "По умолчанию"}
+    
+    first = letter.upper()
+    
+    # Проверяем есть ли буква в группе
+    if first in VOICE_GROUPS:
+        return VOICE_GROUPS[first]
+    
+    # Для неизвестных букв - мужской голос
+    return {"voice": "ru-RU-DmitryNeural", "gender": "male", "name": "По умолчанию"}
 
+DEFAULT_VOICE = "ru-RU-SvetlanaNeural"
+
+# ============================================================================
+# VOICE_TYPE_MAP - настройки для типов голоса (мужской, женский и т.д.)
+# ============================================================================
 VOICE_TYPE_MAP = {
     "default": {"pitch": "+0%", "rate": "+0%"},
     "male": {"pitch": "-10%", "rate": "-5%"},
@@ -31,16 +78,12 @@ VOICE_TYPE_MAP = {
 
 CHARACTER_VOICE_MAP = {
     "narrator": {
-        "ru": "ru-RU-DmitryNeural",
-        "en": "en-US-GuyNeural",
+        "ru": "ru-RU-SvetlanaNeural",
+        "en": "en-US-JennyNeural",
     },
     "fox": {
-        "ru": "ru-RU-DmitryNeural",
-        "en": "en-US-TonyNeural",
-    },
-    "book": {
-        "ru": "ru-RU-DmitryNeural",
-        "en": "en-US-ChristopherNeural",
+        "ru": "ru-RU-SvetlanaNeural",
+        "en": "en-US-JennyNeural",
     },
     "male": {
         "ru": "ru-RU-DmitryNeural",
@@ -53,19 +96,8 @@ CHARACTER_VOICE_MAP = {
 }
 
 def _add_prosody(text: str, base_pitch: float = 0, base_rate: float = 0, base_volume: float = 0) -> str:
-    stripped = text.strip()
-    if not stripped:
-        return text
-    
-    # Don't add automatic prosody if user has custom settings
-    if base_pitch != 0 or base_rate != 0 or base_volume != 0:
-        return text
-    
-    last_char = stripped[-1]
-    if last_char == "?":
-        return f'<prosody pitch="+8%" rate="90%">{text}</prosody>'
-    elif last_char == "!":
-        return f'<prosody volume="+20%" pitch="+5%">{text}</prosody>'
+    # Возвращаем текст как есть - не добавляем SSML теги для знаков препинания
+    # Они читаются как текст и ломают озвучивание
     return text
 
 class TTSService:
@@ -82,14 +114,51 @@ class TTSService:
         if character:
             char_voices = CHARACTER_VOICE_MAP.get(character.lower())
             if char_voices:
-                return char_voices.get(language, VOICE_MAP.get(language, DEFAULT_VOICE))
-        return VOICE_MAP.get(language, DEFAULT_VOICE)
+                return char_voices.get(language, DEFAULT_VOICE)
+        return DEFAULT_VOICE
+    
+    def _get_voice_for_voice_type(self, voice_type: str, language: str = "ru") -> str:
+        """Получить голос по типу (male/female/имя голоса)"""
+        voice_type = voice_type.lower()
+        if voice_type == "male":
+            return "ru-RU-DmitryNeural" if language == "ru" else "en-US-GuyNeural"
+        elif voice_type == "female":
+            return "ru-RU-SvetlanaNeural" if language == "ru" else "en-US-JennyNeural"
+        # Это имя голоса
+        return voice_type
+
+    def _get_voice_for_character(
+        self,
+        character_name: Optional[str] = None,
+        character_gender: Optional[str] = None,
+        language: str = "ru"
+    ) -> str:
+        """Получить голос для конкретного персонажа по gender или первой букве имени"""
+        # Если указан пол персонажа - используем его
+        if character_gender:
+            if character_gender == "female":
+                voice_info = {"voice": "ru-RU-SvetlanaNeural", "gender": "female"}
+            else:  # male или любой другой
+                voice_info = {"voice": "ru-RU-DmitryNeural", "gender": "male"}
+        elif character_name:
+            voice_info = get_voice_by_first_letter(character_name[0])
+        else:
+            return DEFAULT_VOICE
+        
+        if language == "en":
+            if voice_info["gender"] == "female":
+                return "en-US-JennyNeural"
+            else:
+                return "en-US-GuyNeural"
+        
+        return voice_info["voice"]
 
     async def synthesize(
         self,
         text: str,
         language: str = "en",
         character: Optional[str] = None,
+        character_gender: Optional[str] = None,
         voice_type: str = "default",
         pitch: float = 0.0,
         rate: float = 0.0,
@@ -100,32 +169,23 @@ class TTSService:
 
         import edge_tts
 
-        voice = self._get_voice(language, character)
+        # Определяем голос
+        # Приоритет: voice_type > character_gender > character > default
+        if voice_type and voice_type != "default" and voice_type != "male" and voice_type != "female":
+            # voice_type это конкретное имя голоса или тип
+            voice = self._get_voice_for_voice_type(voice_type, language)
+        elif character or character_gender:
+            voice = self._get_voice_for_character(character, character_gender, language)
+        else:
+            voice = self._get_voice(language, None)
+
         tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
         tmp_path = tmp.name
         tmp.close()
 
         try:
-            # Build final text - if custom pitch/rate/volume, use directly without auto-prosody
-            final_text = text
-            if pitch != 0 or rate != 0 or volume != 0:
-                # User has custom settings - use directly with prosody tags
-                prosody_parts = []
-                if pitch != 0:
-                    prosody_parts.append(f'pitch="{int(pitch * 100)}%"')
-                if rate != 0:
-                    prosody_parts.append(f'rate="{int(rate * 100)}%"')
-                if volume != 0:
-                    prosody_parts.append(f'volume="{int(volume * 100)}%"')
-                if prosody_parts:
-                    final_text = f'<prosody {" ".join(prosody_parts)}>{text}</prosody>'
-            else:
-                # No custom settings - use auto-prosody for punctuation
-                final_text = _add_prosody(text)
-            
-            # Wrap in speak tag with voice
-            ssml = f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="{language}"><voice name="{voice}">{final_text}</voice></speak>'
-            communicate = edge_tts.Communicate(ssml, voice)
+            # Используем plain text без SSML тегов
+            communicate = edge_tts.Communicate(text, voice)
             await communicate.save(tmp_path)
             with open(tmp_path, "rb") as f:
                 return f.read()

@@ -866,7 +866,7 @@ export default function LocalReaderPage() {
                   >
                     {showCharacterLabels && para.character && (
                       <span style={{ fontWeight: 600, color: "var(--accent)", fontSize: "0.85em", marginRight: 6 }}>
-                        [{para.character}]
+                        [{typeof para.character === 'string' ? para.character : (para.character as any).name}]
                       </span>
                     )}
                     {para.text}
