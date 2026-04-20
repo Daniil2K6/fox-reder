@@ -1,0 +1,76 @@
+{
+  "format_version": "vblite2",
+  "title": "Тестовая книга: 4 персонажа",
+  "author": "Тестовый автор",
+  "content": [
+    {
+      "title": "Глава 1: Знакомство",
+      "content": [
+        {
+          "type": "text",
+          "text": "Эй, народ! Кто-нибудь меня слышит?",
+          "character": {
+            "name": "Багдан",
+            "gender": "male"
+          }
+        },
+        {
+          "type": "text",
+          "text": "Слышу, слышу! Что случилось?",
+          "character": {
+            "name": "Ярик",
+            "gender": "male"
+          }
+        },
+        {
+          "type": "text",
+          "text": "Привет! Я тоже здесь. Что обсуждаем?",
+          "character": {
+            "name": "Анджелина",
+            "gender": "female"
+          }
+        },
+        {
+          "type": "text",
+          "text": "Всем приветики! О, компания собралась!",
+          "character": {
+            "name": "Яшма",
+            "gender": "female"
+          }
+        },
+        {
+          "type": "text",
+          "text": "Да так, просто проверяю связь. Как у вас дела?",
+          "character": {
+            "name": "Багдан",
+            "gender": "male"
+          }
+        },
+        {
+          "type": "text",
+          "text": "Всё отлично! А ты как?",
+          "character": {
+            "name": "Ярик",
+            "gender": "male"
+          }
+        },
+        {
+          "type": "text",
+          "text": "У меня всё хорошо, спасибо! Рада видеть всех!",
+          "character": {
+            "name": "Анджелина",
+            "gender": "female"
+          }
+        },
+        {
+          "type": "text",
+          "text": "Класс! Давайте общаться!",
+          "character": {
+            "name": "Яшма",
+            "gender": "female"
+          }
+        }
+      ]
+    }
+  ]
+}
