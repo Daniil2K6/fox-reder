@@ -45,6 +45,9 @@ class UserOut(BaseModel):
     created_at: datetime
     preferred_voice: str = "default"
     preferred_language: str = "ru"
+    voice_pitch: float = 0.0
+    voice_rate: float = 0.0
+    voice_volume: float = 0.0
 
     class Config:
         from_attributes = True
@@ -142,6 +145,9 @@ def me(user: User = Depends(require_user)):
         "created_at": user.created_at,
         "preferred_voice": user.preferred_voice or "default",
         "preferred_language": user.preferred_language or "ru",
+        "voice_pitch": user.voice_pitch or 0.0,
+        "voice_rate": user.voice_rate or 0.0,
+        "voice_volume": user.voice_volume or 0.0,
     }
 
 
@@ -183,9 +189,23 @@ def set_voice_preference(
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    voice = payload.get("voice", "default")
+    voice = payload.get("voice_type", "default")
     language = payload.get("language", "ru")
+    pitch = payload.get("pitch", 0.0)
+    rate = payload.get("rate", 0.0)
+    volume = payload.get("volume", 0.0)
+    
     user.preferred_voice = voice
     user.preferred_language = language
+    user.voice_pitch = pitch
+    user.voice_rate = rate
+    user.voice_volume = volume
+    
     db.commit()
-    return {"voice": voice, "language": language}
+    return {
+        "voice_type": voice, 
+        "language": language,
+        "pitch": pitch,
+        "rate": rate,
+        "volume": volume,
+    }

@@ -52,16 +52,19 @@ CHARACTER_VOICE_MAP = {
     },
 }
 
-def _add_prosody(text: str) -> str:
+def _add_prosody(text: str, base_pitch: float = 0, base_rate: float = 0, base_volume: float = 0) -> str:
     stripped = text.strip()
     if not stripped:
         return text
+    
+    # Don't add automatic prosody if user has custom settings
+    if base_pitch != 0 or base_rate != 0 or base_volume != 0:
+        return text
+    
     last_char = stripped[-1]
     if last_char == "?":
-        # Question: raise pitch, slower rate
         return f'<prosody pitch="+8%" rate="90%">{text}</prosody>'
     elif last_char == "!":
-        # Exclamation: raise volume and pitch
         return f'<prosody volume="+20%" pitch="+5%">{text}</prosody>'
     return text
 
@@ -87,7 +90,10 @@ class TTSService:
         text: str,
         language: str = "en",
         character: Optional[str] = None,
-        voice_type: str = "default"
+        voice_type: str = "default",
+        pitch: float = 0.0,
+        rate: float = 0.0,
+        volume: float = 0.0,
     ) -> bytes:
         if not self._ready:
             self.load()
@@ -100,14 +106,26 @@ class TTSService:
         tmp.close()
 
         try:
-            # Process text with SSML for intonation
-            processed_text = _add_prosody(text)
-            # If processed_text contains SSML tags, wrap in <speak>
-            if "<prosody" in processed_text:
-                ssml = f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="{language}"><voice name="{voice}">{processed_text}</voice></speak>'
-                communicate = edge_tts.Communicate(ssml, voice)
+            # Build final text - if custom pitch/rate/volume, use directly without auto-prosody
+            final_text = text
+            if pitch != 0 or rate != 0 or volume != 0:
+                # User has custom settings - use directly with prosody tags
+                prosody_parts = []
+                if pitch != 0:
+                    prosody_parts.append(f'pitch="{int(pitch * 100)}%"')
+                if rate != 0:
+                    prosody_parts.append(f'rate="{int(rate * 100)}%"')
+                if volume != 0:
+                    prosody_parts.append(f'volume="{int(volume * 100)}%"')
+                if prosody_parts:
+                    final_text = f'<prosody {" ".join(prosody_parts)}>{text}</prosody>'
             else:
-                communicate = edge_tts.Communicate(processed_text, voice)
+                # No custom settings - use auto-prosody for punctuation
+                final_text = _add_prosody(text)
+            
+            # Wrap in speak tag with voice
+            ssml = f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="{language}"><voice name="{voice}">{final_text}</voice></speak>'
+            communicate = edge_tts.Communicate(ssml, voice)
             await communicate.save(tmp_path)
             with open(tmp_path, "rb") as f:
                 return f.read()

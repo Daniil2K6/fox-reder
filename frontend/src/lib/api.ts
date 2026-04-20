@@ -301,18 +301,21 @@ export async function apiDeleteComment(bookId: number, commentId: number) {
   return res.json();
 }
 
-export async function apiSetVoicePreference(voice: string, language: string) {
+export async function apiSetVoicePreference(voiceType: string, language: string, pitch: number = 0, rate: number = 0, volume: number = 0) {
   const res = await request("/api/auth/voice", {
     method: "PUT",
-    body: JSON.stringify({ voice, language }),
+    body: JSON.stringify({ voice_type: voiceType, language, pitch, rate, volume }),
   });
   return res.json();
 }
 
-export async function apiTTSChunkWithCharacter(text: string, language: string = "en", character?: string, voiceType?: string): Promise<Blob> {
+export async function apiTTSChunkWithCharacter(text: string, language: string = "en", character?: string, voiceType?: string, pitch?: number, rate?: number, volume?: number): Promise<Blob> {
   const body: any = { text, language };
   if (character) body.character = character;
   if (voiceType) body.voice_type = voiceType;
+  if (pitch !== undefined) body.pitch = pitch;
+  if (rate !== undefined) body.rate = rate;
+  if (volume !== undefined) body.volume = volume;
   const res = await request("/api/tts/chunk", {
     method: "POST",
     body: JSON.stringify(body),

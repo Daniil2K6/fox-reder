@@ -11,6 +11,7 @@ import {
   apiTTSChunk,
   apiTTSChunkWithCharacter,
   apiSetVoicePreference,
+  apiGetMe,
 } from "@/lib/api";
 
 /* ── types ─────────────────────────────────────────────────────────── */
@@ -170,15 +171,18 @@ export default function ReaderPage() {
   const [viewMode, setViewMode] = useState<ViewMode>("continuous");
   const [currentChapter, setCurrentChapter] = useState(0);
 
-   /* ── TTS state ── */
-   const [ttsState, setTtsState] = useState<"idle" | "loading" | "playing" | "paused">("idle");
-   const [language, setLanguage] = useState("ru");
-   const [voiceType, setVoiceType] = useState<"default" | "male" | "female" | "soft">("default");
-   const [highlightPara, setHighlightPara] = useState(-1);
-   const [showCharacterLabels, setShowCharacterLabels] = useState(false);
-   const audioRef = useRef<HTMLAudioElement | null>(null);
-    const ttsQueueRef = useRef<{ text: string; paraIdx: number; character?: string; voiceType: string }[]>([]);
-   const ttsActiveRef = useRef(false);
+/* ── TTS state ── */
+    const [ttsState, setTtsState] = useState<"idle" | "loading" | "playing" | "paused">("idle");
+    const [language, setLanguage] = useState("ru");
+    const [voiceType, setVoiceType] = useState<"default" | "male" | "female" | "soft" | "custom">("default");
+    const [pitch, setPitch] = useState(0);
+    const [rate, setRate] = useState(0);
+    const [volume, setVolume] = useState(0);
+    const [highlightPara, setHighlightPara] = useState(-1);
+    const [showCharacterLabels, setShowCharacterLabels] = useState(false);
+    const audioRef = useRef<HTMLAudioElement | null>(null);
+     const ttsQueueRef = useRef<{ text: string; paraIdx: number; character?: string; voiceType: string; pitch: number; rate: number; volume: number }[]>([]);
+    const ttsActiveRef = useRef(false);
 
    const contentRef = useRef<HTMLDivElement>(null);
 
@@ -243,25 +247,31 @@ export default function ReaderPage() {
     };
   }, []);
 
-   useEffect(() => {
-     const user = getUser();
-     if (user?.preferred_language) {
-       setLanguage(user.preferred_language);
-     }
-   }, []);
+useEffect(() => {
+      const user = getUser();
+      if (user?.preferred_language) {
+        setLanguage(user.preferred_language);
+      }
+    }, []);
 
    useEffect(() => {
-     const user = getUser();
-     if (user) {
-       const vt = (user as any).preferred_voice as any;
-       if (vt && ["default", "male", "female", "soft"].includes(vt)) {
-         setVoiceType(vt);
+     apiGetMe().then((me: any) => {
+       if (me.preferred_voice) {
+         setVoiceType(me.preferred_voice as any);
        }
-       const lang = (user as any).preferred_language;
-       if (lang && ["ru", "en", "es", "fr", "de", "ja"].includes(lang)) {
-         setLanguage(lang);
+       if (me.preferred_language) {
+         setLanguage(me.preferred_language);
        }
-     }
+       if (me.voice_pitch !== undefined) {
+         setPitch(me.voice_pitch);
+       }
+       if (me.voice_rate !== undefined) {
+         setRate(me.voice_rate);
+       }
+       if (me.voice_volume !== undefined) {
+         setVolume(me.voice_volume);
+       }
+     }).catch(() => {});
    }, []);
 
    useEffect(() => {
@@ -349,12 +359,15 @@ export default function ReaderPage() {
     setTtsState("loading");
 
      try {
-       const blob = await apiTTSChunkWithCharacter(
-         item.text,
-         language,
-         item.character,
-         item.voiceType
-       );
+const blob = await apiTTSChunkWithCharacter(
+          item.text,
+          language,
+          item.character,
+          item.voiceType,
+          item.pitch,
+          item.rate,
+          item.volume
+        );
       const url = URL.createObjectURL(blob);
       const audio = audioRef.current!;
       audio.src = url;
@@ -391,16 +404,19 @@ export default function ReaderPage() {
         return;
       }
 
-      const paras = visibleParagraphs.slice(paraIdx).filter((p) => p.text.length > 0);
-      if (paras.length === 0) return;
+const paras = visibleParagraphs.slice(paraIdx).filter((p) => p.text.length > 0);
+       if (paras.length === 0) return;
 
-      ttsActiveRef.current = true;
-       ttsQueueRef.current = paras.map((p, i) => ({
-         text: p.text,
-         paraIdx: paraIdx + i,
-         character: p.character || undefined,
-         voiceType: voiceType,
-       }));
+       ttsActiveRef.current = true;
+        ttsQueueRef.current = paras.map((p, i) => ({
+          text: p.text,
+          paraIdx: paraIdx + i,
+          character: p.character || undefined,
+          voiceType: voiceType,
+          pitch: pitch,
+          rate: rate,
+          volume: volume,
+        }));
 
       playQueueItem();
     },
@@ -423,9 +439,12 @@ export default function ReaderPage() {
     handleReadFromParagraph(0);
   };
 
-  const handleVoiceTypeChange = (newVoice: typeof voiceType) => {
+  const handleVoiceTypeChange = async (newVoice: typeof voiceType, newPitch?: number, newRate?: number, newVolume?: number) => {
     setVoiceType(newVoice);
-    apiSetVoicePreference(newVoice, language).catch(() => {});
+    if (newPitch !== undefined) setPitch(newPitch);
+    if (newRate !== undefined) setRate(newRate);
+    if (newVolume !== undefined) setVolume(newVolume);
+    await apiSetVoicePreference(newVoice, language, newPitch ?? pitch, newRate ?? rate, newVolume ?? volume).catch(() => {});
   };
 
   const isSpeaking = ttsState === "playing" || ttsState === "loading" || ttsState === "paused";
@@ -1052,7 +1071,7 @@ export default function ReaderPage() {
                 onChange={(e) => {
                   const lang = e.target.value;
                   setLanguage(lang);
-                  apiSetVoicePreference(voiceType, lang).catch(() => {});
+                  apiSetVoicePreference(voiceType, lang, pitch, rate, volume).catch(() => {});
                 }}
                 style={{
                   width: "100%",
@@ -1085,28 +1104,107 @@ export default function ReaderPage() {
                   marginBottom: 6,
                 }}
               >
-                Диктор
+                Тон голоса
               </label>
               <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                {(["default", "male", "female", "soft"] as const).map((vt) => (
+                {([
+                  { id: "default", label: "Обычный", pitch: 0, rate: 0, volume: 0 },
+                  { id: "male", label: "Мужской", pitch: -2, rate: 0, volume: 0 },
+                  { id: "female", label: "Женский", pitch: 2, rate: 0, volume: 0 },
+                  { id: "soft", label: "Мягкий", pitch: 0, rate: -1, volume: 1 },
+                ] as const).map((v) => (
                   <button
-                    key={vt}
-                    onClick={() => handleVoiceTypeChange(vt)}
+                    key={v.id}
+                    onClick={() => handleVoiceTypeChange(v.id as any, v.pitch, v.rate, v.volume)}
                     style={{
                       padding: "6px 12px",
                       borderRadius: 8,
                       border: "1px solid var(--border)",
-                      background: voiceType === vt ? "var(--accent)" : "var(--bg-secondary)",
-                      color: voiceType === vt ? "#fff" : "var(--text-primary)",
+                      background: voiceType === v.id ? "var(--accent)" : "var(--bg-secondary)",
+                      color: voiceType === v.id ? "#fff" : "var(--text-primary)",
                       fontSize: 12,
                       cursor: "pointer",
                     }}
                   >
-                    {vt === "default" ? "Обычный" : vt === "male" ? "Мужской" : vt === "female" ? "Женский" : "Мягкий"}
+                    {v.label}
                   </button>
                 ))}
               </div>
             </div>
+
+            {/* pitch slider */}
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: "block", fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>
+                Тон: {pitch > 0 ? "+" : ""}{pitch}
+              </label>
+              <input
+                type="range"
+                min="-5"
+                max="5"
+                step="0.5"
+                value={pitch}
+                onChange={(e) => { setPitch(parseFloat(e.target.value)); setVoiceType("custom" as any); }}
+                style={{ width: "100%", cursor: "pointer" }}
+              />
+            </div>
+
+            {/* rate slider */}
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: "block", fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>
+                Скорость: {rate > 0 ? "+" : ""}{rate}
+              </label>
+              <input
+                type="range"
+                min="-3"
+                max="3"
+                step="0.5"
+                value={rate}
+                onChange={(e) => { setRate(parseFloat(e.target.value)); setVoiceType("custom" as any); }}
+                style={{ width: "100%", cursor: "pointer" }}
+              />
+            </div>
+
+            {/* volume slider */}
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: "block", fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>
+                Громкость: {volume > 0 ? "+" : ""}{volume}
+              </label>
+              <input
+                type="range"
+                min="-3"
+                max="3"
+                step="0.5"
+                value={volume}
+                onChange={(e) => { setVolume(parseFloat(e.target.value)); setVoiceType("custom" as any); }}
+                style={{ width: "100%", cursor: "pointer" }}
+              />
+            </div>
+
+            {/* save button */}
+            <button
+              onClick={async () => {
+                try {
+                  await apiSetVoicePreference(voiceType, language, pitch, rate, volume);
+                  alert("Настройки сохранены!");
+                } catch (err: any) {
+                  alert(err.message);
+                }
+              }}
+              style={{
+                width: "100%",
+                padding: "8px 0",
+                borderRadius: 8,
+                border: "none",
+                background: "var(--accent)",
+                color: "#fff",
+                fontSize: 13,
+                fontWeight: 500,
+                cursor: "pointer",
+                marginBottom: 20,
+              }}
+            >
+              Сохранить настройки
+            </button>
 
             {/* character labels */}
             <div style={{ marginBottom: 20 }}>

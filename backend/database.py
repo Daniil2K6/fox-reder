@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 from sqlalchemy import (
-    Column, Integer, String, DateTime, Boolean, ForeignKey, Text, UniqueConstraint, create_engine, text, Table
+    Column, Integer, String, DateTime, Boolean, ForeignKey, Text, UniqueConstraint, create_engine, text, Table, Float
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
@@ -32,6 +32,9 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     preferred_voice = Column(String(32), default="ru", nullable=True)
     preferred_language = Column(String(32), default="ru", nullable=True)
+    voice_pitch = Column(Float, default=0.0, nullable=True)
+    voice_rate = Column(Float, default=0.0, nullable=True)
+    voice_volume = Column(Float, default=0.0, nullable=True)
     avatar_url = Column(String(512), nullable=True)
 
     books = relationship("Book", back_populates="owner")

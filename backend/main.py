@@ -110,6 +110,10 @@ async def synthesize_chunk(
     language = payload.get("language", "en")
     character = payload.get("character")
     voice_type = payload.get("voice_type", getattr(user, "preferred_voice", "default"))
+    pitch = payload.get("pitch", 0.0)
+    rate = payload.get("rate", 0.0)
+    volume = payload.get("volume", 0.0)
+    
     if not text:
         raise HTTPException(status_code=400, detail="No text provided")
     if len(text) > 1000:
@@ -118,7 +122,8 @@ async def synthesize_chunk(
     try:
         service = get_tts_service()
         audio_bytes = await service.synthesize(
-            text, language=language, character=character, voice_type=voice_type
+            text, language=language, character=character, voice_type=voice_type,
+            pitch=pitch, rate=rate, volume=volume
         )
         return StreamingResponse(
             io.BytesIO(audio_bytes),
