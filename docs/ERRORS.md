@@ -155,6 +155,48 @@ try {
 
 ---
 
+## 10. Неправильная логика выбора голоса персонажа
+
+**Дата:** 20.04.2026
+
+**Проблема:**
+Голос персонажа выбирался по первой букве имени, игнорируя указанный пол. Например:
+- Багдан (male) → женский голос (буква Б)
+- Ярик (male) → женский голос (буква Я)
+
+**Причина:**
+Система смешивала две независимые переменные:
+- character_gender (пол персонажа)
+- character_name (имя персонажа, первая буква)
+
+**Решение:**
+Разделены логики:
+
+1. **Приоритет - gender персонажа:**
+   - Если указан character_gender → сразу используем голос по полу
+   - male → ru-RU-DmitryNeural
+   - female → ru-RU-SvetlanaNeural
+
+2. **Fallback - по имени:**
+   - Только если character_gender НЕ указан
+   - Используется первая буква имени
+
+```python
+def _get_voice_for_character(character_name, character_gender, language):
+    # По gender персонажа выбираем голос
+    if character_gender == "female":
+        return "ru-RU-SvetlanaNeural"
+    elif character_gender == "male":
+        return "ru-RU-DmitryNeural"
+    
+    # Если gender не указан - используем имя для определения (fallback)
+    if character_name:
+        letter_voice = get_voice_by_first_letter(character_name[0])
+        return letter_voice.get("voice")
+```
+
+---
+
 ## 9. Microsoft Edge TTS ограничения
 
 **Дата:** ранее
