@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fox Converter — Dev UI</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: #1a1a2e; color: #e0e0e0; }
+  h1 { color: #ff8c00; }
+  .card { background: #16213e; border-radius: 8px; padding: 16px; margin: 12px 0; border: 1px solid #0f3460; }
+  .status { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
+  .online { background: #00ff88; }
+  .offline { background: #ff4444; }
+  pre { background: #0d1b2a; padding: 12px; border-radius: 4px; overflow-x: auto; }
+  button { background: #ff8c00; color: #1a1a2e; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+  button:hover { background: #ffa500; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  textarea { width: 100%; min-height: 100px; background: #0d1b2a; color: #e0e0e0; border: 1px solid #0f3460; border-radius: 4px; padding: 8px; font-family: monospace; }
+  .badge { display: inline-block; background: #0f3460; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; margin-left: 8px; }
+</style>
+</head>
+<body>
+  <h1>Fox Converter <span class="badge">dev</span></h1>
+
+  <div class="card">
+    <h2>LLM Server</h2>
+    <p id="server-status"><span class="status offline"></span>Проверка...</p>
+    <p>Host: <code id="server-host">http://localhost:8080</code></p>
+    <button id="check-btn">Проверить</button>
+  </div>
+
+  <div class="card">
+    <h2>Pre-prompt</h2>
+    <textarea id="prompt-area" placeholder="Загрузка промпта..."></textarea>
+    <p style="margin: 4px 0; font-size: 0.9em; color: #888;">
+      <span id="prompt-status"></span>
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>Быстрый тест</h2>
+    <button id="test-btn" disabled>Протестировать LLM</button>
+    <pre id="test-output" style="margin-top: 12px;">Нажми "Протестировать", чтобы проверить LLM.</pre>
+  </div>
+
+<script>
+  const PROMPT_PATH = '../prompts/fb2_to_vblite.md';
+
+  async function checkServer() {
+    const statusEl = document.getElementById('server-status');
+    const host = document.getElementById('server-host').textContent;
+    statusEl.innerHTML = '<span class="status offline"></span>Проверка...';
+    try {
+      const resp = await fetch(host + '/v1/models', { signal: AbortSignal.timeout(5000) });
+      if (resp.ok) {
+        statusEl.innerHTML = '<span class="status online"></span>Запущен ✓';
+        document.getElementById('test-btn').disabled = false;
+      } else {
+        statusEl.innerHTML = '<span class="status offline"></span>Ошибка: ' + resp.status;
+      }
+    } catch {
+      statusEl.innerHTML = '<span class="status offline"></span>Не отвечает ✗';
+      document.getElementById('test-btn').disabled = true;
+    }
+  }
+
+  async function loadPrompt() {
+    const area = document.getElementById('prompt-area');
+    const status = document.getElementById('prompt-status');
+    try {
+      const resp = await fetch(PROMPT_PATH);
+      if (resp.ok) {
+        area.value = await resp.text();
+        status.textContent = '✓ Промпт загружен';
+      } else {
+        status.textContent = '✗ Промпт не найден (файл будет доступен после сборки)';
+      }
+    } catch {
+      status.textContent = '✗ Не удалось загрузить промпт';
+    }
+  }
+
+  async function testLLM() {
+    const output = document.getElementById('test-output');
+    const host = document.getElementById('server-host').textContent;
+    output.textContent = 'Отправка запроса...';
+    try {
+      const resp = await fetch(host + '/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'qwen2.5-7b-instruct',
+          messages: [
+            { role: 'system', content: 'Ответь одним предложением.' },
+            { role: 'user', content: 'Привет! Как тебя зовут?' }
+          ],
+          temperature: 0.1,
+          max_tokens: 100
+        }),
+        signal: AbortSignal.timeout(30000)
+      });
+      const data = await resp.json();
+      output.textContent = JSON.stringify(data, null, 2);
+    } catch (e) {
+      output.textContent = 'Ошибка: ' + e.message;
+    }
+  }
+
+  document.getElementById('check-btn').addEventListener('click', checkServer);
+  document.getElementById('test-btn').addEventListener('click', testLLM);
+
+  checkServer();
+  loadPrompt();
+</script>
+</body>
+</html>

@@ -10,10 +10,23 @@ __pycache__/
 frontend/.next/
 frontend/out/
 
-# Database
+# Database files (CRITICAL: keep data out of version control)
 backend/fox_reader.db
+backend/fox_reader.db-shm
+backend/fox_reader.db-wal
+backend/fox_reader.db-journal
 
-# Uploads and covers (optional, keep .gitkeep)
+# User storage directory (books, covers, avatars, series)
+# CRITICAL: Do not commit librali directory to avoid data leaks
+backend/librali/
+
+# Environment variables (CRITICAL: never commit secrets)
+.env
+.env.local
+.env.*.local
+.env.production
+
+# Uploads and covers (legacy paths, now covered by librali/)
 backend/uploads/*
 backend/covers/*
 !backend/uploads/.gitkeep
@@ -31,6 +44,9 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
+*.sublime-*
 
 # Temporary files
 *.tmp
@@ -38,3 +54,16 @@ Thumbs.db
 
 # WARNING / Plans (personal notes)
 WARNING.md
+
+# AI Assistant guide
+AI_ASSISTANT.md
+
+# Converter models
+converter/models/
+
+# Converter build artifacts
+converter/llama.cpp/build/
+
+# Build artifacts (TypeScript)
+frontend/tsconfig.tsbuildinfo
+

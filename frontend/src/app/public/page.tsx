@@ -24,6 +24,7 @@ interface Book {
   owner_avatar: string | null;
   series_ids?: number[];
   series_names?: string[];
+  formats?: string[];
 }
 
 export default function PublicLibraryPage() {
@@ -267,6 +268,9 @@ export default function PublicLibraryPage() {
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
                         {book.has_structure && <span style={{ fontSize: 9, padding: "2px 5px", borderRadius: 3, background: "var(--accent-light)", color: "var(--accent)", fontWeight: 600 }}>VOXBOOK</span>}
+                        {book.formats && book.formats.length > 0 && (
+                          <span style={{ fontSize: 10, color: "var(--text-secondary)", fontWeight: 500 }}>{book.formats.map((f: string) => f.toUpperCase()).join(", ")}</span>
+                        )}
                         <button onClick={(e) => { e.preventDefault(); handleLike(book.id, book.is_liked); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: book.is_liked ? "red" : "var(--text-muted)", display: "flex", alignItems: "center", gap: 2 }}>
                           {book.is_liked ? "❤️" : "🤍"} {book.like_count}
                         </button>
@@ -349,13 +353,14 @@ export default function PublicLibraryPage() {
                         {a.username[0].toUpperCase()}
                       </div>
                     )}
-                    <div>
-                      <span style={{ fontWeight: 500, color: "var(--text-primary)", fontSize: 15 }}>{a.username}</span>
-                      <span style={{ marginLeft: 8, fontSize: 12, color: "var(--text-muted)" }}>{a.book_count} книг</span>
-                      <span style={{ marginLeft: 8, fontSize: 12, color: "var(--text-muted)" }}>• {a.subscriber_count || 0} подписчиков</span>
-                      <span style={{ marginLeft: 8, fontSize: 12, color: "var(--text-muted)" }}>• 👁 {a.total_views || 0}</span>
-                      <span style={{ marginLeft: 8, fontSize: 12, color: "var(--text-muted)" }}>• 💬 {a.total_comments || 0}</span>
-                    </div>
+                      <div>
+                        <span style={{ fontWeight: 500, color: "var(--text-primary)", fontSize: 15 }}>{a.username}</span>
+                        <span style={{ marginLeft: 8, fontSize: 12, color: "var(--text-muted)" }}>{a.book_count} книг</span>
+                        <span style={{ marginLeft: 8, fontSize: 12, color: "var(--text-muted)" }}>• {a.subscriber_count || 0} подписчиков</span>
+                        <span style={{ marginLeft: 8, fontSize: 12, color: "var(--text-muted)" }}>• ❤️ {a.total_likes || 0}</span>
+                        <span style={{ marginLeft: 8, fontSize: 12, color: "var(--text-muted)" }}>• 👁 {a.total_views || 0}</span>
+                        <span style={{ marginLeft: 8, fontSize: 12, color: "var(--text-muted)" }}>• 💬 {a.total_comments || 0}</span>
+                      </div>
                   </div>
                   {user && user.id !== a.id && (
                     <button onClick={(e) => { e.preventDefault(); handleAuthorSubscribe(a.id); }} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", background: subscribedAuthors.has(a.id) ? "var(--accent)" : "transparent", color: subscribedAuthors.has(a.id) ? "#fff" : "var(--text-secondary)", cursor: "pointer", fontSize: 13 }}>

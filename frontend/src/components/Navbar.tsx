@@ -11,7 +11,7 @@ interface Breadcrumb {
 }
 
 interface NavbarProps {
-  activeTab?: "home" | "public" | "profile" | "admin" | "notifications";
+  activeTab?: "home" | "public" | "profile" | "admin" | "notifications" | "converter";
   hideTabs?: boolean;
   breadcrumbs?: Breadcrumb[];
 }
@@ -80,33 +80,32 @@ export function Navbar({ activeTab, hideTabs, breadcrumbs }: NavbarProps) {
         </Link>
         
         {breadcrumbs && breadcrumbs.length > 0 && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: 8 }}>
-            <span style={{ color: "var(--text-muted)", fontSize: 14 }}>/</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 4, marginLeft: "auto" }}>
             {breadcrumbs.map((crumb, idx) => (
-              <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div key={idx} style={{ display: "flex", alignItems: "center", gap: 4 }}>
                 {crumb.href ? (
                   <Link href={crumb.href} style={{ 
-                    fontSize: 13, 
+                    fontSize: 12, 
                     color: "var(--text-secondary)", 
                     textDecoration: "none",
-                    padding: "4px 8px",
-                    borderRadius: 6,
+                    padding: "4px 6px",
+                    borderRadius: 4,
                     transition: "background 0.15s",
                   }}>
                     {crumb.label}
                   </Link>
                 ) : (
                   <span style={{ 
-                    fontSize: 13, 
+                    fontSize: 12, 
                     color: "var(--text-primary)", 
                     fontWeight: 500,
-                    padding: "4px 8px",
+                    padding: "4px 6px",
                   }}>
                     {crumb.label}
                   </span>
                 )}
                 {idx < breadcrumbs.length - 1 && (
-                  <span style={{ color: "var(--text-muted)", fontSize: 12 }}>›</span>
+                  <span style={{ color: "var(--text-muted)", fontSize: 11 }}>›</span>
                 )}
               </div>
             ))}
@@ -133,6 +132,15 @@ export function Navbar({ activeTab, hideTabs, breadcrumbs }: NavbarProps) {
               color: activeTab === "public" ? "#fff" : "var(--text-secondary)",
               fontWeight: 500,
             }}>Библиотека</Link>
+            <Link href="/converter" style={{ 
+              padding: "6px 12px", 
+              borderRadius: 8, 
+              textDecoration: "none", 
+              fontSize: 13,
+              background: activeTab === "converter" ? "var(--accent)" : "transparent",
+              color: activeTab === "converter" ? "#fff" : "var(--text-secondary)",
+              fontWeight: 500,
+            }}>Конвертер</Link>
             {user && (
               <>
                 <Link href="/profile" style={{ 

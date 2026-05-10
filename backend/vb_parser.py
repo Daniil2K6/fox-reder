@@ -73,8 +73,31 @@ def _collect_sections(sections, chapters: list, chapter_idx: list, parent_title:
 def parse_fb2(file_path: str) -> dict:
     from lxml import etree
 
-    tree = etree.parse(file_path)
-    root = tree.getroot()
+    FB2_NS = "http://www.gribuser.ru/xml/fictionbook/2.0"
+
+    def _fb2_tag(tag: str) -> str:
+        return f"{{{FB2_NS}}}{tag}"
+
+    try:
+        parser = etree.XMLParser(huge_tree=True)
+        tree = etree.parse(file_path, parser)
+        root = tree.getroot()
+    except Exception as e:
+        err_str = str(e).lower()
+        if "too long" in err_str or "huge" in err_str or "resource" in err_str:
+            logger.warning(f"Large FB2 file detected, retrying with huge_tree: {file_path}")
+            try:
+                parser = etree.XMLParser(huge_tree=True)
+                tree = etree.parse(file_path, parser)
+                root = tree.getroot()
+            except Exception as e2:
+                logger.error(f"Failed to parse FB2 even with huge_tree: {e2}")
+                # Return minimal structure for failed parse
+                filename = os.path.basename(file_path)
+                title = os.path.splitext(filename)[0].split('_', 1)[1] if '_' in filename else filename
+                return {"format_version": "fb2", "title": title, "author": "", "toc": [], "chapters": []}
+        else:
+            raise
 
     title = "Untitled"
     title_info = root.find(f".//{_fb2_tag('title-info')}")
@@ -97,6 +120,16 @@ def parse_fb2(file_path: str) -> dict:
             if parts:
                 author_text = " ".join(parts)
 
+    # Extract cover image from coverpage
+    cover_image_id = None
+    coverpage = root.find(f".//{_fb2_tag('coverpage')}")
+    if coverpage is not None:
+        for img in coverpage:
+            if img.tag == _fb2_tag("image"):
+                href = img.get("{http://www.w3.org/1999/xlink}href")
+                if href:
+                    cover_image_id = href.lstrip("#")
+    
     bodies = root.findall(_fb2_tag("body"))
     chapters = []
     chapter_idx = [0]
@@ -158,7 +191,27 @@ def parse_fb2(file_path: str) -> dict:
             })
 
     toc = [{"id": ch["id"], "title": ch["title"], "index": ch["index"]} for ch in chapters]
-
+    
+    # Add cover image as first paragraph if exists
+    if cover_image_id:
+        chapters.insert(0, {
+            "id": "cover",
+            "title": "Обложка",
+            "index": 0,
+            "paragraphs": [
+                {
+                    "id": "cover-image",
+                    "text": "",
+                    "image": cover_image_id,
+                    "character": None,
+                    "emotion": None,
+                    "bold": False,
+                    "italic": False,
+                    "color": None,
+                }
+            ],
+        })
+    
     return {
         "format_version": "fb2",
         "title": title,
@@ -282,3 +335,268 @@ def extract_text(file_path: str, filename: str) -> tuple[str, Optional[str]]:
     except Exception as e:
         logger.error(f"Error extracting text from {filename}: {e}")
         return "", None
+
+
+# ============================================================================
+# Image extraction from books
+# ============================================================================
+def extract_fb2_images(file_path: str, output_dir: str) -> dict:
+    """Extract images from FB2 file to output directory. Returns dict of id -> filename."""
+    from lxml import etree
+    
+    images = {}
+    try:
+        parser = etree.XMLParser(huge_tree=True)
+        tree = etree.parse(file_path, parser)
+        root = tree.getroot()
+        
+        binaries = root.findall(f".//{{{FB2_NS}}}binary")
+        for binary in binaries:
+            bid = binary.get("id")
+            content_type = binary.get("content-type", "")
+            
+            if "jpeg" in content_type.lower() or "jpg" in content_type.lower():
+                ext = ".jpg"
+            elif "png" in content_type.lower():
+                ext = ".png"
+            elif "gif" in content_type.lower():
+                ext = ".gif"
+            elif "webp" in content_type.lower():
+                ext = ".webp"
+            else:
+                ext = ".jpg"
+            
+            if binary.text:
+                import base64
+                try:
+                    image_data = base64.b64decode(binary.text)
+                    filename = f"{bid}{ext}"
+                    out_path = os.path.join(output_dir, filename)
+                    with open(out_path, "wb") as f:
+                        f.write(image_data)
+                    images[bid] = filename
+                except Exception as e:
+                    logger.warning(f"Failed to decode binary {bid}: {e}")
+                    
+    except Exception as e:
+        logger.error(f"Error extracting images from FB2: {e}")
+    
+    return images
+
+
+def extract_epub_images(file_path: str, output_dir: str) -> dict:
+    """Extract images from EPUB file to output directory. Returns dict of id -> filename."""
+    import zipfile
+    
+    images = {}
+    try:
+        with zipfile.ZipFile(file_path, "r") as zf:
+            for name in zf.namelist():
+                if name.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
+                    try:
+                        data = zf.read(name)
+                        basename = os.path.basename(name)
+                        out_path = os.path.join(output_dir, basename)
+                        with open(out_path, "wb") as f:
+                            f.write(data)
+                        images[basename] = basename
+                    except Exception as e:
+                        logger.warning(f"Failed to extract {name}: {e}")
+                        
+    except Exception as e:
+        logger.error(f"Error extracting images from EPUB: {e}")
+    
+    return images
+
+
+def get_book_images(book_path: str, book_id: int) -> dict:
+    """Extract and cache book images. Returns dict of id -> url."""
+    import hashlib
+    
+    cache_dir = os.path.join(os.path.dirname(book_path), ".images", str(book_id))
+    os.makedirs(cache_dir, exist_ok=True)
+    
+    ext = os.path.splitext(book_path)[1].lower()
+    
+    if ext == ".fb2":
+        return extract_fb2_images(book_path, cache_dir)
+    elif ext == ".epub":
+        return extract_epub_images(book_path, cache_dir)
+    else:
+        return {}
+
+
+def extract_cover_from_file(file_path: str, output_dir: str) -> Optional[str]:
+    """Extract cover image from FB2 or EPUB file. Returns cover filename or None."""
+    ext = os.path.splitext(file_path)[1].lower()
+    
+    if ext == ".fb2":
+        return extract_cover_from_fb2(file_path, output_dir)
+    elif ext == ".epub":
+        return extract_cover_from_epub(file_path, output_dir)
+    
+    return None
+
+
+def extract_cover_from_fb2(file_path: str, output_dir: str) -> Optional[str]:
+    """Extract cover from FB2 file and save to output_dir. Returns filename or None."""
+    from lxml import etree
+    import base64
+    
+    try:
+        tree = etree.parse(file_path, etree.XMLParser(huge_tree=True))
+        root = tree.getroot()
+        
+        # Find coverpage and image reference
+        coverpage = root.find(f".//{{{FB2_NS}}}coverpage")
+        if coverpage is None:
+            return None
+        
+        cover_image_id = None
+        for img in coverpage:
+            if img.tag == f"{{{FB2_NS}}}image":
+                href = img.get("{http://www.w3.org/1999/xlink}href")
+                if href:
+                    cover_image_id = href.lstrip("#")
+                    break
+        
+        if not cover_image_id:
+            return None
+        
+        # Find binary with matching id
+        binaries = root.findall(f".//{{{FB2_NS}}}binary")
+        for binary in binaries:
+            if binary.get("id") == cover_image_id:
+                content_type = binary.get("content-type", "image/jpeg")
+                
+                # Determine extension
+                if "jpeg" in content_type.lower() or "jpg" in content_type.lower():
+                    ext = ".jpg"
+                elif "png" in content_type.lower():
+                    ext = ".png"
+                elif "gif" in content_type.lower():
+                    ext = ".gif"
+                elif "webp" in content_type.lower():
+                    ext = ".webp"
+                else:
+                    ext = ".jpg"
+                
+                if binary.text:
+                    try:
+                        image_data = base64.b64decode(binary.text)
+                        filename = f"cover{ext}"
+                        out_path = os.path.join(output_dir, filename)
+                        with open(out_path, "wb") as f:
+                            f.write(image_data)
+                        return filename
+                    except Exception as e:
+                        logger.warning(f"Failed to decode cover image {cover_image_id}: {e}")
+                        return None
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error extracting cover from FB2: {e}")
+        return None
+
+
+def extract_cover_from_epub(file_path: str, output_dir: str) -> Optional[str]:
+    """Extract cover from EPUB file and save to output_dir. Returns filename or None."""
+    import zipfile
+    import xml.etree.ElementTree as ET
+    
+    try:
+        with zipfile.ZipFile(file_path, "r") as zf:
+            # Try to read OPF to find cover
+            opf_file = None
+            
+            # First, try to find container.xml to get path to OPF
+            try:
+                container_xml = zf.read("META-INF/container.xml")
+                root = ET.fromstring(container_xml)
+                # Find rootfile element
+                for elem in root.iter():
+                    if "rootfile" in elem.tag:
+                        opf_file = elem.get("full-path")
+                        break
+            except:
+                pass
+            
+            if not opf_file:
+                # Fallback: look for *.opf in root
+                for name in zf.namelist():
+                    if name.endswith(".opf"):
+                        opf_file = name
+                        break
+            
+            if opf_file:
+                try:
+                    opf_content = zf.read(opf_file)
+                    root = ET.fromstring(opf_content)
+                    
+                    # Look for cover in metadata
+                    ns = {"opf": "http://www.idpf.org/2007/opf", 
+                          "dc": "http://purl.org/dc/elements/1.1/"}
+                    
+                    cover_id = None
+                    for meta in root.findall(".//opf:meta[@name='cover']", ns):
+                        cover_id = meta.get("content")
+                        break
+                    
+                    if not cover_id:
+                        # Try to find cover from manifest with id containing 'cover'
+                        for item in root.findall(".//opf:item", ns):
+                            item_id = item.get("id", "").lower()
+                            if "cover" in item_id:
+                                cover_id = item.get("id")
+                                break
+                    
+                    if cover_id:
+                        # Find the file path from manifest
+                        cover_path = None
+                        for item in root.findall(".//opf:item", ns):
+                            if item.get("id") == cover_id:
+                                cover_path = item.get("href")
+                                break
+                        
+                        if cover_path:
+                            # Resolve relative path from OPF location
+                            opf_dir = os.path.dirname(opf_file)
+                            full_cover_path = os.path.join(opf_dir, cover_path).replace("\\", "/")
+                            
+                            try:
+                                cover_data = zf.read(full_cover_path)
+                                ext = os.path.splitext(cover_path)[1].lower()
+                                if ext not in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+                                    ext = ".jpg"
+                                
+                                filename = f"cover{ext}"
+                                out_path = os.path.join(output_dir, filename)
+                                with open(out_path, "wb") as f:
+                                    f.write(cover_data)
+                                return filename
+                            except Exception as e:
+                                logger.warning(f"Failed to extract cover from {full_cover_path}: {e}")
+                except Exception as e:
+                    logger.warning(f"Error parsing OPF: {e}")
+            
+            # Fallback: look for first image in EPUB
+            for name in zf.namelist():
+                if name.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
+                    try:
+                        cover_data = zf.read(name)
+                        ext = os.path.splitext(name)[1].lower()
+                        filename = f"cover{ext}"
+                        out_path = os.path.join(output_dir, filename)
+                        with open(out_path, "wb") as f:
+                            f.write(cover_data)
+                        return filename
+                    except Exception as e:
+                        logger.warning(f"Failed to extract {name}: {e}")
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error extracting cover from EPUB: {e}")
+        return None
+

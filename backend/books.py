@@ -4,21 +4,29 @@ import os
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import func, UniqueConstraint
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-from database import Series, Book, User, Comment, Like, Subscription, Notification, get_db
+from database import Series, Book, BookVersion, User, Comment, Like, Subscription, Notification, get_db
 from auth import require_user, get_current_user, require_admin
-from vb_parser import parse_vb, parse_fb2, extract_plain_text
+from vb_parser import parse_vb, parse_fb2, extract_plain_text, extract_cover_from_file
+from config import MAX_FILE_SIZE, MAX_FILE_SIZE_MB
 
-UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-COVERS_DIR = os.path.join(os.path.dirname(__file__), "covers")
-os.makedirs(COVERS_DIR, exist_ok=True)
+LIBRALI_DIR = os.path.join(os.path.dirname(__file__), "librali")
+os.makedirs(os.path.join(LIBRALI_DIR, "books"), exist_ok=True)
+os.makedirs(os.path.join(LIBRALI_DIR, "covers"), exist_ok=True)
+os.makedirs(os.path.join(LIBRALI_DIR, "series"), exist_ok=True)
+os.makedirs(os.path.join(LIBRALI_DIR, "avatars"), exist_ok=True)
+
+# Для совместимости
+UPLOAD_DIR = os.path.join(LIBRALI_DIR, "books")
+COVERS_DIR = os.path.join(LIBRALI_DIR, "covers")
+SERIES_DIR = os.path.join(LIBRALI_DIR, "series")
+AVATAR_DIR = os.path.join(LIBRALI_DIR, "avatars")
 
 SUPPORTED_EXTENSIONS = (".txt", ".fb2", ".epub", ".vb", ".vblite")
 
@@ -64,6 +72,8 @@ class BookOut(BaseModel):
     is_liked: bool = False
     view_count: int = 0
     owner_avatar: Optional[str] = None
+    formats: List[str] = []
+    preferred_format: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -77,6 +87,7 @@ class AuthorOut(BaseModel):
     subscriber_count: int = 0
     total_views: int = 0
     total_comments: int = 0
+    total_likes: int = 0
     avatar_url: Optional[str] = None
 
     class Config:
@@ -147,13 +158,15 @@ def extract_text(file_path: str, filename: str) -> tuple[str, Optional[str]]:
 @router.post("/upload", response_model=BookOut)
 async def upload_book(
     file: UploadFile = File(...),
-    series_name: Optional[str] = Query(None),
-    title: Optional[str] = Query(None),
-    genres: Optional[str] = Query(None),
-    description: Optional[str] = Query(None),
+    series_name: Optional[str] = Form(None),
+    title: Optional[str] = Form(None),
+    genres: Optional[str] = Form(None),
+    description: Optional[str] = Form(None),
+    group_id: Optional[str] = Form(None),
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ):
+    print(f"Upload params: title={title}, group_id={group_id}, filename={file.filename}")
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
 
@@ -168,25 +181,97 @@ async def upload_book(
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
     
+    # SECURITY: Check file size limit (defense in depth)
+    file_size = len(content)
+    if file_size > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Maximum size: {MAX_FILE_SIZE_MB:.0f}MB"
+        )
+    
     sha256 = hashlib.sha256(content).hexdigest()
     print(f"Uploaded file SHA256: {sha256}")
 
-    duplicate = db.query(Book).filter(Book.owner_id == user.id, Book.sha256 == sha256).first()
-    if duplicate:
-        print(f"Duplicate detected: existing book {duplicate.id} with same SHA256")
-        raise HTTPException(status_code=409, detail="Эта книга уже есть в вашей библиотеке")
+    book_title = title.strip() if title else os.path.splitext(file.filename)[0]
+    book_format = ext.lstrip(".")
+    
+    # Check if adding as alternative format to existing book
+    existing_book = None
+    print(f"group_id = {group_id}")
+    if group_id:
+        try:
+            gid = int(group_id)
+            print(f"Parsing group_id: {gid}")
+            existing_book = db.query(Book).filter(Book.id == gid, Book.owner_id == user.id).first()
+            print(f"Found by group_id: {existing_book}")
+        except Exception as e:
+            print(f"Error parsing group_id: {e}")
+            pass
+    
+    # Or find by title
+    if not existing_book and title:
+        existing_book = db.query(Book).filter(
+            Book.owner_id == user.id,
+            func.lower(Book.title) == title.lower()
+        ).first()
+        print(f"Found by title: {existing_book}")
+    
+    # Check if this exact file already exists (only for new books)
+    if not existing_book:
+        duplicate = db.query(Book).filter(Book.owner_id == user.id, Book.sha256 == sha256).first()
+        if duplicate:
+            print(f"Duplicate detected: existing book {duplicate.id} with same SHA256")
+            raise HTTPException(status_code=409, detail="Эта книга уже есть в вашей библиотеке")
+    
+    if existing_book:
+        # Add as alternative format
+        safe_name = f"{sha256[:16]}_{file.filename}"
+        file_path = os.path.join(UPLOAD_DIR, safe_name)
+        with open(file_path, "wb") as f:
+            f.write(content)
+        
+        version = BookVersion(
+            book_id=existing_book.id,
+            format=book_format,
+            file_path=file_path,
+            sha256=sha256,
+            filename=file.filename,
+        )
+        db.add(version)
+        db.commit()
+        
+        # Try to extract cover from this format if book doesn't have one
+        if not existing_book.cover_image:
+            try:
+                cover_filename = extract_cover_from_file(file_path, COVERS_DIR)
+                if cover_filename:
+                    existing_book.cover_image = cover_filename
+                    db.commit()
+            except Exception as e:
+                print(f"Warning: Could not extract cover: {e}")
 
-    user_dir = os.path.join(UPLOAD_DIR, str(user.id))
-    os.makedirs(user_dir, exist_ok=True)
+        return BookOut(
+            id=existing_book.id,
+            title=existing_book.title,
+            filename=file.filename,
+            sha256=sha256,
+            is_public=existing_book.is_public,
+            owner_id=existing_book.owner_id,
+            owner_username=user.username,
+            has_structure=False,
+            series_ids=[s.id for s in existing_book.series_list],
+            series_names=[s.name for s in existing_book.series_list],
+            view_count=existing_book.view_count or 0,
+            formats=[v.format for v in existing_book.versions] + [file.filename.split('.')[-1].lower()],
+            preferred_format=existing_book.preferred_format,
+        )
+
+    # New book
     safe_name = f"{sha256[:16]}_{file.filename}"
-
-    file_path = os.path.join(user_dir, safe_name)
+    file_path = os.path.join(UPLOAD_DIR, safe_name)
 
     with open(file_path, "wb") as f:
         f.write(content)
-
-    book_title = title.strip() if title else os.path.splitext(file.filename)[0]
-    text_content, structured_content = extract_text(file_path, file.filename)
 
     book = Book(
         title=book_title,
@@ -195,11 +280,14 @@ async def upload_book(
         file_path=file_path,
         is_public=True,
         owner_id=user.id,
-        text_content=text_content,
         genres=genres if genres else None,
         description=description if description else None,
     )
     db.add(book)
+    
+     # Extract text content for new books
+    text_content, structured_content = extract_text(file_path, file.filename)
+    book.text_content = text_content
     
     try:
         db.commit()
@@ -224,10 +312,25 @@ async def upload_book(
     db.commit()
     db.refresh(book)
 
+    # Extract cover from file
+    try:
+        cover_filename = extract_cover_from_file(file_path, COVERS_DIR)
+        if cover_filename and not book.cover_image:
+            book.cover_image = cover_filename
+            db.commit()
+    except Exception as e:
+        print(f"Warning: Could not extract cover: {e}")
+
     if structured_content:
         struct_path = file_path + ".struct.json"
         with open(struct_path, "w", encoding="utf-8") as f:
             f.write(structured_content)
+
+    formats = [book.filename.split('.')[-1].lower()]
+    if book.versions:
+        for v in book.versions:
+            if v.format not in formats:
+                formats.append(v.format)
 
     return BookOut(
         id=book.id,
@@ -242,6 +345,8 @@ async def upload_book(
         series_names=[s.name for s in book.series_list],
         view_count=0,
         owner_avatar=None,
+        formats=formats,
+        preferred_format=book.preferred_format,
     )
 
 
@@ -269,6 +374,8 @@ def my_books(user: User = Depends(require_user), db: Session = Depends(get_db)):
             comment_count=comment_count,
             view_count=b.view_count or 0,
             owner_avatar=owner.avatar_url if owner else None,
+            formats=[b.filename.split('.')[-1].lower()] + [v.format for v in b.versions],
+            preferred_format=b.preferred_format,
         ))
     return result
 
@@ -346,9 +453,10 @@ def public_books(
             is_liked=is_liked,
             view_count=b.view_count or 0,
             owner_avatar=owner.avatar_url if owner else None,
+formats=[b.filename.split('.')[-1].lower()] + [v.format for v in b.versions],
+            preferred_format=b.preferred_format,
         ))
     return result
-
 
 @router.get("/public/count")
 def public_books_count(
@@ -383,10 +491,10 @@ def hot_books(
         Book.owner_id.in_(plus_user_ids)
     ).all()
     if len(books) <= 5:
-        return [{"id": b.id, "title": b.title, "cover_image": b.cover_image, "owner_id": b.owner_id, "owner_username": b.owner.username if b.owner else ""} for b in books]
+        return [{"id": b.id, "title": b.title, "cover_image": b.cover_image, "owner_id": b.owner_id, "owner_username": b.owner.username if b.owner else "", "formats": [b.filename.split('.')[-1].lower()] + [v.format for v in b.versions]} for b in books]
     import random
     selected = random.sample(books, 5)
-    return [{"id": b.id, "title": b.title, "cover_image": b.cover_image, "owner_id": b.owner_id, "owner_username": b.owner.username if b.owner else ""} for b in selected]
+    return [{"id": b.id, "title": b.title, "cover_image": b.cover_image, "owner_id": b.owner_id, "owner_username": b.owner.username if b.owner else "", "formats": [b.filename.split('.')[-1].lower()] + [v.format for v in b.versions]} for b in selected]
 
 
 @router.get("/search")
@@ -430,6 +538,8 @@ def search_books(
                 comment_count=comment_count,
                 view_count=b.view_count or 0,
                 owner_avatar=owner.avatar_url if owner else None,
+                formats=[b.filename.split('.')[-1].lower()] + [v.format for v in b.versions],
+                preferred_format=b.preferred_format,
             ))
     
     return result
@@ -445,9 +555,11 @@ def list_authors(
     result = []
     for a in authors:
         books = db.query(Book).filter(Book.owner_id == a.id, Book.is_public == True).all()
+        book_ids = [b.id for b in books]
         book_count = len(books)
         total_views = sum(b.view_count or 0 for b in books)
         total_comments = sum(db.query(Comment).filter(Comment.book_id == b.id).count() for b in books)
+        total_likes = db.query(Like).filter(Like.book_id.in_(book_ids)).count() if book_ids else 0
         subscriber_count = db.query(Subscription).filter(Subscription.author_id == a.id).count()
         is_subscribed = False
         if user:
@@ -461,6 +573,7 @@ def list_authors(
             subscriber_count=subscriber_count,
             total_views=total_views,
             total_comments=total_comments,
+            total_likes=total_likes,
             avatar_url=a.avatar_url,
         ))
     return result
@@ -529,6 +642,8 @@ def get_book(
         is_liked=is_liked,
         view_count=book.view_count or 0,
         owner_avatar=owner.avatar_url if owner else None,
+        formats=[book.filename.split('.')[-1].lower()] + [v.format for v in book.versions],
+        preferred_format=book.preferred_format,
     )
 
 
@@ -558,7 +673,9 @@ def get_book_text(
         raise HTTPException(status_code=404, detail="Book not found")
     if book.owner_id != (user.id if user else -1) and not book.is_public:
         raise HTTPException(status_code=403, detail="Access denied")
-    return {"text": book.text_content or "", "title": book.title}
+    
+    text = book.text_content or ""
+    return {"text": text, "title": book.title}
 
 
 @router.get("/{book_id}/structured")
@@ -572,13 +689,62 @@ def get_book_structured(
         raise HTTPException(status_code=404, detail="Book not found")
     if book.owner_id != (user.id if user else -1) and not book.is_public:
         raise HTTPException(status_code=403, detail="Access denied")
-
-    struct_path = book.file_path + ".struct.json"
-    if not os.path.exists(struct_path):
-        raise HTTPException(status_code=404, detail="No structured content available")
-
-    with open(struct_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    
+    # Check preferred_format and use version if set
+    text_content = book.text_content
+    file_path = book.file_path
+    
+    if book.preferred_format:
+        from database import BookVersion
+        version = db.query(BookVersion).filter(
+            BookVersion.book_id == book_id,
+            BookVersion.format == book.preferred_format
+        ).first()
+        if version:
+            file_path = version.file_path
+            # Parse version file on-the-fly if needed
+            if version.format == 'fb2':
+                from vb_parser import parse_fb2
+                try:
+                    data = parse_fb2(file_path)
+                    try:
+                        from vb_parser import get_book_images
+                        images = get_book_images(file_path, book_id)
+                        data["images"] = images
+                    except: pass
+                    return data
+                except Exception as e:
+                    pass
+    
+    # Check text_content first - maybe it's JSON
+    if text_content:
+        try:
+            data = json.loads(text_content)
+            if isinstance(data, dict) and "chapters" in data:
+                try:
+                    from vb_parser import get_book_images
+                    images = get_book_images(file_path, book_id)
+                    data["images"] = images
+                except: pass
+                return data
+        except: pass
+    
+    # Try .struct.json file on disk
+    struct_path = file_path + ".struct.json"
+    if os.path.exists(struct_path):
+        try:
+            with open(struct_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            try:
+                from vb_parser import get_book_images
+                images = get_book_images(file_path, book_id)
+                data["images"] = images
+            except: pass
+            return data
+        except: pass
+    
+    raise HTTPException(status_code=404, detail="No structured content available")
+    
     return data
 
 
@@ -597,6 +763,48 @@ def toggle_visibility(
     return {"id": book.id, "is_public": book.is_public}
 
 
+@router.put("/{book_id}/title")
+def rename_book(
+    book_id: int,
+    payload: dict,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    book = db.query(Book).filter(Book.id == book_id, Book.owner_id == user.id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    
+    new_title = payload.get("title", "").strip()
+    if not new_title:
+        raise HTTPException(status_code=400, detail="Title cannot be empty")
+    
+    book.title = new_title
+    db.commit()
+    return {"id": book.id, "title": book.title}
+
+
+@router.put("/{book_id}/preferred-format")
+def set_preferred_format(
+    book_id: int,
+    payload: dict,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    book = db.query(Book).filter(Book.id == book_id, Book.owner_id == user.id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    
+    formats = [book.filename.split('.')[-1].lower()] + [v.format for v in book.versions]
+    new_format = payload.get("format", "").strip().lower()
+    
+    if new_format and new_format not in formats:
+        raise HTTPException(status_code=400, detail=f"Format '{new_format}' is not available for this book")
+    
+    book.preferred_format = new_format if new_format else None
+    db.commit()
+    return {"id": book.id, "preferred_format": book.preferred_format}
+
+
 @router.delete("/{book_id}")
 def delete_book(
     book_id: int,
@@ -610,11 +818,23 @@ def delete_book(
         book = db.query(Book).filter(Book.id == book_id, Book.owner_id == user.id).first()
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
+    
+    # Delete main file
     if os.path.exists(book.file_path):
         os.remove(book.file_path)
+    # Delete struct file if exists
     struct_path = book.file_path + ".struct.json"
     if os.path.exists(struct_path):
         os.remove(struct_path)
+    
+    # Delete all versions
+    from database import BookVersion
+    versions = db.query(BookVersion).filter(BookVersion.book_id == book_id).all()
+    for version in versions:
+        if os.path.exists(version.file_path):
+            os.remove(version.file_path)
+        db.delete(version)
+    
     db.delete(book)
     db.commit()
     return {"detail": "Book deleted"}
@@ -874,7 +1094,7 @@ async def upload_series_cover(
     if ext not in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
         raise HTTPException(status_code=400, detail="Invalid image format")
     
-    series_dir = os.path.join(UPLOAD_DIR, "series_covers")
+    series_dir = os.path.join(LIBRALI_DIR, "series")
     os.makedirs(series_dir, exist_ok=True)
     cover_filename = f"series_{series_id}{ext}"
     cover_path = os.path.join(series_dir, cover_filename)
@@ -895,7 +1115,7 @@ def get_series_cover(
     s = db.query(Series).filter(Series.id == series_id).first()
     if not s or not s.cover_image:
         raise HTTPException(status_code=404, detail="No cover")
-    series_dir = os.path.join(UPLOAD_DIR, "series_covers")
+    series_dir = os.path.join(LIBRALI_DIR, "series")
     cover_path = os.path.join(series_dir, s.cover_image)
     if not os.path.exists(cover_path):
         raise HTTPException(status_code=404, detail="Cover file missing")
@@ -972,6 +1192,66 @@ def assign_to_series(
     return {"id": book.id, "series_ids": [s.id for s in book.series_list]}
 
 
+@router.get("/{book_id}/versions")
+def get_book_versions(
+    book_id: int,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    """Get all versions/formats of a book."""
+    book = db.query(Book).filter(Book.id == book_id, Book.owner_id == user.id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    
+    main_format = os.path.splitext(book.filename)[1].lstrip(".").lower()
+    versions = db.query(BookVersion).filter(BookVersion.book_id == book_id).all()
+    
+    return {
+        "versions": [
+            {"format": main_format, "filename": book.filename},
+            *[{"format": v.format, "filename": v.filename} for v in versions]
+        ]
+    }
+
+
+@router.delete("/{book_id}/version/{version_format}")
+def delete_book_version(
+    book_id: int,
+    version_format: str,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    """Delete a specific format version of a book."""
+    book = db.query(Book).filter(Book.id == book_id, Book.owner_id == user.id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    
+    main_format = os.path.splitext(book.filename)[1].lstrip(".").lower()
+    
+    # Cannot delete main format
+    if version_format.lower() == main_format.lower():
+        raise HTTPException(status_code=400, detail="Cannot delete main format")
+    
+    version = db.query(BookVersion).filter(
+        BookVersion.book_id == book_id,
+        BookVersion.format == version_format.lower()
+    ).first()
+    
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+    
+    # Delete file
+    if os.path.exists(version.file_path):
+        try:
+            os.remove(version.file_path)
+        except OSError as e:
+            print(f"Warning: Could not delete file {version.file_path}: {e}")
+    
+    db.delete(version)
+    db.commit()
+    return {"detail": "Version deleted"}
+
+
 @router.post("/preview")
 async def preview_book(
     file: UploadFile = File(...),
@@ -1042,6 +1322,60 @@ async def upload_cover(
     book.cover_image = cover_filename
     db.commit()
     return {"cover_image": book.cover_image}
+
+
+@router.get("/{book_id}/images")
+def get_book_images(
+    book_id: int,
+    db: Session = Depends(get_db),
+):
+    """Get list of embedded images in a book."""
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    if not book.file_path or not os.path.exists(book.file_path):
+        raise HTTPException(status_code=404, detail="Book file not found")
+    
+    from vb_parser import get_book_images
+    images = get_book_images(book.file_path, book_id)
+    return {"images": images}
+
+
+@router.get("/{book_id}/image/{image_id}")
+def get_book_image(
+    book_id: int,
+    image_id: str,
+    db: Session = Depends(get_db),
+):
+    """Get a specific image from a book."""
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    if not book.file_path or not os.path.exists(book.file_path):
+        raise HTTPException(status_code=404, detail="Book file not found")
+    
+    cache_dir = os.path.join(os.path.dirname(book.file_path), ".images", str(book_id))
+    image_path = os.path.join(cache_dir, image_id)
+    
+    if not os.path.exists(image_path):
+        # Extract on demand
+        from vb_parser import get_book_images
+        get_book_images(book.file_path, book_id)
+    
+    if not os.path.exists(image_path):
+        raise HTTPException(status_code=404, detail="Image not found")
+    
+    # Determine content type
+    if image_id.lower().endswith(".png"):
+        content_type = "image/png"
+    elif image_id.lower().endswith(".gif"):
+        return FileResponse(image_path, media_type="image/gif")
+    elif image_id.lower().endswith(".webp"):
+        return FileResponse(image_path, media_type="image/webp")
+    else:
+        return FileResponse(image_path, media_type="image/jpeg")
+    
+    return FileResponse(image_path, media_type=content_type)
 
 
 @router.get("/{book_id}/cover")
@@ -1311,9 +1645,8 @@ async def upload_avatar(
     elif ext == ".webp" and is_animated_image(content) and not user.is_plus:
         raise HTTPException(status_code=403, detail="Анимированные изображения доступны только для Plus пользователей")
     
-    avatar_dir = os.path.join(os.path.dirname(__file__), "avatars")
-    os.makedirs(avatar_dir, exist_ok=True)
-    avatar_filename = f"avatar_{user.id}{ext}"
+    avatar_dir = AVATAR_DIR
+    
     avatar_path = os.path.join(avatar_dir, avatar_filename)
     if user.avatar_url and os.path.exists(os.path.join(avatar_dir, user.avatar_url)):
         try:
@@ -1335,7 +1668,7 @@ def get_avatar(
     user = db.query(User).filter(User.id == user_id).first()
     if not user or not user.avatar_url:
         raise HTTPException(status_code=404, detail="No avatar")
-    avatar_dir = os.path.join(os.path.dirname(__file__), "avatars")
+    avatar_dir = AVATAR_DIR
     avatar_path = os.path.join(avatar_dir, user.avatar_url)
     if not os.path.exists(avatar_path):
         raise HTTPException(status_code=404, detail="Avatar file missing")
@@ -1456,7 +1789,7 @@ def admin_delete_series(
     if not series:
         raise HTTPException(status_code=404, detail="Series not found")
     if series.cover_image:
-        series_dir = os.path.join(UPLOAD_DIR, "series_covers")
+        series_dir = SERIES_DIR
         cover_path = os.path.join(series_dir, series.cover_image)
         if os.path.exists(cover_path):
             try:

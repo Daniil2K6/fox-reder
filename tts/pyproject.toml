@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fox-tts"
+version = "0.1.0"
+description = "TTS engine library for Fox Reader"
+requires-python = ">=3.12"
+dependencies = [
+    "edge-tts>=6.1.0",
+]
+
+[project.optional-dependencies]
+cloud = ["edge-tts>=6.1.0"]
+local = []
+
+[tool.setuptools]
+package-dir = {"" = "."}
+packages = ["tts"]

@@ -1,4 +1,4 @@
-const API_BASE = "";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -122,14 +122,12 @@ export async function apiGetMe() {
 export async function apiUploadBook(file: File, seriesName?: string, title?: string, genres?: string, description?: string) {
   const form = new FormData();
   form.append("file", file);
-  let url = "/api/books/upload";
-  const params = [];
-  if (seriesName) params.push(`series_name=${encodeURIComponent(seriesName)}`);
-  if (title) params.push(`title=${encodeURIComponent(title)}`);
-  if (genres) params.push(`genres=${encodeURIComponent(genres)}`);
-  if (description) params.push(`description=${encodeURIComponent(description)}`);
-  if (params.length > 0) url += "?" + params.join("&");
-  const res = await request(url, {
+  if (title) form.append("title", title);
+  if (seriesName) form.append("series_name", seriesName);
+  if (genres) form.append("genres", genres);
+  if (description) form.append("description", description);
+  
+  const res = await request("/api/books/upload", {
     method: "POST",
     body: form,
   });
@@ -185,6 +183,42 @@ export async function apiToggleVisibility(id: number, isPublic: boolean) {
   const res = await request(`/api/books/${id}/visibility?is_public=${isPublic}`, {
     method: "PUT",
   });
+  return res.json();
+}
+
+export async function apiRenameBook(id: number, title: string) {
+  const res = await request(`/api/books/${id}/title`, {
+    method: "PUT",
+    body: JSON.stringify({ title }),
+  });
+  return res.json();
+}
+
+export async function apiSetPreferredFormat(id: number, format: string) {
+  const res = await request(`/api/books/${id}/preferred-format`, {
+    method: "PUT",
+    body: JSON.stringify({ format }),
+  });
+  return res.json();
+}
+
+export async function apiGetBookVersions(id: number) {
+  const res = await request(`/api/books/${id}/versions`);
+  return res.json();
+}
+
+export async function apiDownloadBook(id: number, format: string) {
+  const res = await request(`/api/books/${id}/download/${format}`);
+  return res.blob();
+}
+
+export async function apiDownloadFormat(id: number, format: string) {
+  const res = await request(`/api/books/${id}/download/${format}`);
+  return res.blob();
+}
+
+export async function apiDeleteBookVersion(id: number, format: string) {
+  const res = await request(`/api/books/${id}/version/${format}`, { method: "DELETE" });
   return res.json();
 }
 

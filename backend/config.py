@@ -14,10 +14,18 @@ BASE_DIR = Path(__file__).resolve().parent
 ROOT_DIR = BASE_DIR.parent
 
 # ============================================================================
+# Безопасность
+# ============================================================================
+MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE", "50000000"))  # 50MB default
+MAX_FILE_SIZE_MB = MAX_FILE_SIZE / (1000 * 1000)
+
+# ============================================================================
 # TTS Настройки
 # ============================================================================
 # Доступные движки: cloud, coqui, piper
 TTS_ENGINE = os.getenv("TTS_ENGINE", "cloud")
+TTS_CHUNK_SIZE = int(os.getenv("TTS_CHUNK_SIZE", "1000"))
+TTS_MAX_LENGTH = int(os.getenv("TTS_MAX_LENGTH", "5000"))
 
 # ============================================================================
 # LLM Настройки
@@ -33,10 +41,14 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./fox_reader.db")
 # ============================================================================
 # Загрузки
 # ============================================================================
-UPLOAD_DIR = ROOT_DIR / "librali" / "uploads"
-COVER_DIR = ROOT_DIR / "librali" / "covers"
-AVATAR_DIR = ROOT_DIR / "librali" / "avatars"
-BOOKS_DIR = ROOT_DIR / "librali" / "books"
+LIBRALI_DIR = ROOT_DIR / "librali"
+COVER_DIR = LIBRALI_DIR / "covers"
+AVATAR_DIR = LIBRALI_DIR / "avatars"
+BOOKS_DIR = LIBRALI_DIR / "books"
+SERIES_DIR = LIBRALI_DIR / "series"
+
+# Для совместимости
+UPLOAD_DIR = LIBRALI_DIR / "books"
 
 # ============================================================================
 # Режим разработки

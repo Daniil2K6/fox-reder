@@ -64,13 +64,23 @@ async def synthesize(
     language: str = "ru",
     character_name: Optional[str] = None,
     character_gender: Optional[str] = None,
+    voice_type: Optional[str] = None,
+    pitch: float = 0.0,
+    rate: float = 0.0,
+    volume: float = 0.0,
     **kwargs
 ) -> bytes:
     """Синтез речи через Microsoft edge-tts"""
     import edge_tts
     
-    # Определяем голос
-    if character_gender == "female":
+    # Определяем голос по voice_type или character
+    if voice_type == "female":
+        voice = "ru-RU-SvetlanaNeural"
+    elif voice_type == "male":
+        voice = "ru-RU-DmitryNeural"
+    elif voice_type == "soft":
+        voice = "ru-RU-SvetlanaNeural"
+    elif character_gender == "female":
         voice = "ru-RU-SvetlanaNeural"
     elif character_gender == "male":
         voice = "ru-RU-DmitryNeural"

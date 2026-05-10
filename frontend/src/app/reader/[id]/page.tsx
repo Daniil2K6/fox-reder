@@ -23,6 +23,7 @@ interface Book {
   is_public: boolean;
   owner_username: string;
   has_structure: boolean;
+  preferred_format?: string | null;
 }
 
 interface TocItem {
@@ -31,18 +32,14 @@ interface TocItem {
   index: number;
 }
 
-interface Character {
-  name: string;
-  gender: string;
-}
-
 interface Paragraph {
   id: string;
   text: string;
-  character: string | Character | null;
+  character: string | null;
   bold: boolean;
   italic: boolean;
   color: string | null;
+  image?: string;
 }
 
 interface Chapter {
@@ -58,6 +55,7 @@ interface StructuredData {
   author: string;
   toc: TocItem[];
   chapters: Chapter[];
+  images?: Record<string, string>;
 }
 
 type ViewMode = "continuous" | "chapter";
@@ -186,7 +184,8 @@ export default function ReaderPage() {
     const [highlightPara, setHighlightPara] = useState(-1);
     const [showCharacterLabels, setShowCharacterLabels] = useState(false);
     const audioRef = useRef<HTMLAudioElement | null>(null);
-     const ttsQueueRef = useRef<{ text: string; paraIdx: number; character?: string; voiceType: string; pitch: number; rate: number; volume: number }[]>([]);
+    type TtsQueueItem = { text: string; paraIdx: number; character?: string | { name?: string; }; voiceType: string; pitch: number; rate: number; volume: number };
+    const ttsQueueRef = useRef<TtsQueueItem[]>([]);
     const ttsActiveRef = useRef(false);
 
    const contentRef = useRef<HTMLDivElement>(null);
@@ -299,6 +298,7 @@ useEffect(() => {
     try {
       const bookData = await apiGetBook(bookId);
       setBook(bookData);
+      
       if (bookData.has_structure) {
         try {
           const s = await apiGetBookStructured(bookId);
@@ -364,8 +364,8 @@ useEffect(() => {
     setTtsState("loading");
 
 try {
-        const charName = typeof item.character === 'string' ? item.character : item.character?.name;
-        const charGender = typeof item.character === 'object' ? item.character?.gender : undefined;
+        const charName = typeof item.character === 'string' ? item.character : (item.character as any)?.name || undefined;
+        const charGender = typeof item.character === 'object' ? (item.character as any)?.gender || undefined : undefined;
         const blob = await apiTTSChunkWithCharacter(
           item.text,
           language,
@@ -393,8 +393,9 @@ try {
       setTtsState("playing");
       await audio.play();
     } catch (err: any) {
-      setError(`TTS: ${err.message}`);
-      playQueueItem();
+      console.error("TTS error:", err);
+      setError(`TTS: ${err.message || err}`);
+      stopSpeaking();
     }
   }, [language, stopSpeaking]);
 
@@ -589,9 +590,17 @@ const paras = visibleParagraphs.slice(paraIdx).filter((p) => p.text.length > 0);
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
             }}
           >
             {book?.title}
+            {book?.preferred_format && (
+              <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "var(--accent-light)", color: "var(--accent)", fontWeight: 600, fontFamily: "sans-serif" }}>
+                {book.preferred_format.toUpperCase()}
+              </span>
+            )}
           </h1>
         </div>
 
@@ -889,12 +898,26 @@ const paras = visibleParagraphs.slice(paraIdx).filter((p) => p.text.length > 0);
                      }}
                    >
 {showCharacterLabels && para.character && (
-                        <span style={{ fontWeight: 600, color: "var(--accent)", fontSize: "0.85em", marginRight: 6 }}>
-                          [{typeof para.character === 'string' ? para.character : (para.character as any).name}]
-                        </span>
+                         <span style={{ fontWeight: 600, color: "var(--accent)", fontSize: "0.85em", marginRight: 6 }}>
+                           [{typeof para.character === 'string' ? para.character : (para.character as any).name}]
+                         </span>
+                       )}
+                      {/* Embedded image in paragraph */}
+                      {(para as any).image && (
+                        <img
+                          src={`/api/books/${bookId}/image/${(para as any).image}`}
+                          alt=""
+                          style={{
+                            maxWidth: "100%",
+                            height: "auto",
+                            display: "block",
+                            margin: "8px 0",
+                            borderRadius: 8,
+                          }}
+                        />
                       )}
-                     {para.text}
-                   </div>
+                      {para.text}
+                    </div>
                 </div>
               ))
             )}

@@ -135,6 +135,21 @@ export default function Home() {
                 >
                   Публичная библиотека
                 </Link>
+                <Link
+                  href="/converter"
+                  style={{
+                    padding: "12px 28px",
+                    borderRadius: 10,
+                    border: "1px solid var(--border)",
+                    background: "var(--bg-secondary)",
+                    color: "var(--text-primary)",
+                    textDecoration: "none",
+                    fontSize: 15,
+                    fontWeight: 500,
+                  }}
+                >
+                  Конвертер
+                </Link>
               </>
             ) : (
               <>

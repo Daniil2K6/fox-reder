@@ -10,7 +10,8 @@ import {
   apiCreateSeries, apiListSeries, apiDeleteSeries, apiAssignToSeries,
   apiPreviewBook, apiGetMe, apiUploadCover, apiUploadAvatar, apiGetAvatarUrl,
   apiGetSeries, apiUpdateSeries, apiReorderSeriesBooks, apiUploadSeriesCover,
-  apiGetSeriesCoverUrl,
+  apiGetSeriesCoverUrl, apiGetBookVersions, apiDownloadBook, apiDeleteBookVersion, apiSetPreferredFormat,
+  apiRenameBook,
 } from "@/lib/api";
 import { GENRES, getGenresByLetter, searchGenres } from "@/lib/genres";
 import { Navbar } from "@/components/Navbar";
@@ -34,6 +35,8 @@ interface Book {
   genres: string | null;
   description: string | null;
   comment_count: number;
+  formats?: string[];
+  preferred_format?: string | null;
 }
 
 interface Chapter {
@@ -235,6 +238,87 @@ export default function ProfilePage() {
   const [editLoading, setEditLoading] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
   const [expandedChapters, setExpandedChapters] = useState<Set<number | string>>(new Set());
+  const [showFormatModal, setShowFormatModal] = useState<number | null>(null);
+  const [formatModalBook, setFormatModalBook] = useState<any>(null);
+  const [availableFormats, setAvailableFormats] = useState<string[]>([]);
+  const [formatFile, setFormatFile] = useState<File | null>(null);
+  const [formatUploading, setFormatUploading] = useState(false);
+  const formatFileRef = useRef<HTMLInputElement>(null);
+
+  const openFormatModal = async (book: Book) => {
+    setFormatModalBook(book);
+    setShowFormatModal(book.id);
+    setFormatFile(null);
+    try {
+      const v = await apiGetBookVersions(book.id);
+      const ext = book.filename.split('.').pop() || 'fb2';
+      setAvailableFormats(v.versions?.map((x: any) => x.format) || [ext]);
+    } catch {
+      setAvailableFormats([book.filename.split('.').pop() || 'fb2']);
+    }
+  };
+
+  const handleSetPreferredFormat = async (format: string) => {
+    if (!formatModalBook) return;
+    try {
+      await apiSetPreferredFormat(formatModalBook.id, format);
+      setFormatModalBook((prev: any) => prev ? { ...prev, preferred_format: format } : null);
+      setBooks((prev: Book[]) => prev.map(b => b.id === formatModalBook.id ? { ...b, preferred_format: format } : b));
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleAddFormat = async () => {
+    if (!formatFile || !formatModalBook) return;
+    setFormatUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", formatFile);
+      formData.append("title", formatModalBook.title);
+      formData.append("group_id", String(formatModalBook.id));
+      
+      const token = getToken();
+      console.log("Token:", token ? "exists" : "none");
+      console.log("Book ID:", formatModalBook.id);
+      console.log("Title:", formatModalBook.title);
+      
+      const res = await fetch("/api/books/upload", {
+        method: "POST",
+        headers: { 
+          "Authorization": `Bearer ${token}` 
+        },
+        body: formData,
+      });
+      
+      const data = await res.json();
+      console.log("Response:", res.status, data);
+      
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(err);
+      }
+      
+      const v = await apiGetBookVersions(formatModalBook.id);
+      setAvailableFormats(v.versions?.map((x: any) => x.format) || [formatModalBook.filename.split('.').pop()]);
+      setFormatFile(null);
+      alert("Формат добавлен!");
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setFormatUploading(false);
+    }
+  };
+
+  const handleDeleteFormat = async (fmt: string) => {
+    if (!confirm(`Удалить формат .${fmt}?`)) return;
+    try {
+      await apiDeleteBookVersion(formatModalBook.id, fmt);
+      setAvailableFormats(availableFormats.filter((f: string) => f !== fmt));
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
 
   useEffect(() => {
     const u = getUser();
@@ -773,6 +857,9 @@ export default function ProfilePage() {
                     )}
                   </div>
                   <span style={{ fontSize: 13, color: "var(--text-primary)" }}>{book.title}</span>
+                  {book.formats && book.formats.length > 0 && (
+                    <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 500, color: "var(--text-secondary)" }}>{book.formats.map((f: string) => f.toUpperCase()).join(", ")}</span>
+                  )}
                 </div>
               )})}
             </div>
@@ -912,59 +999,46 @@ export default function ProfilePage() {
                   onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--accent)")}
                   onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--border)")}
                 >
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                     <Link href={`/book/${book.id}`} style={{ fontWeight: 500, color: "var(--text-primary)", textDecoration: "none", fontSize: 15 }}>
-                       {book.title}
-                       {isVox && (
-                         <span style={{ marginLeft: 8, fontSize: 10, padding: "1px 6px", borderRadius: 4, background: "var(--accent-light)", color: "var(--accent)", fontWeight: 600 }}>
-                           VOXBOOK
-                         </span>
-                       )}
-                     </Link>
-                      <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                        <span>{book.filename.split('.').pop()?.toLowerCase() ? '.' + book.filename.split('.').pop()?.toLowerCase() : ''}</span>
-                       {book.series_names.length > 0 && (
-                         <span style={{ color: "var(--accent)", fontWeight: 500 }}>{book.series_names.join(", ")}</span>
+<div style={{ flex: 1, minWidth: 0, display: "flex", gap: 16, alignItems: "center" }}>
+                     <div style={{ width: 50, height: 70, borderRadius: 6, overflow: "hidden", background: "var(--bg-tertiary)", flexShrink: 0 }}>
+                       {book.cover_image ? (
+                         <img src={`/api/books/${book.id}/cover`} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                       ) : (
+                         <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>📖</div>
                        )}
                      </div>
-                  </div>
-                   <div style={{ display: "flex", gap: 6, marginLeft: 16, alignItems: "center", flexWrap: "wrap" }}>
-                     {/* В серию */}
-                     <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                       <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Серии:</label>
-                       <select
-                         multiple
-                         value={book.series_ids.map(String)}
-                         onChange={(e) => {
-                           const selected = Array.from(e.target.selectedOptions).map(opt => Number(opt.value));
-                           handleAssignSeries(book.id, selected);
-                         }}
-                         style={{
-                           padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)",
-                           background: "var(--bg-secondary)", color: "var(--text-secondary)",
-                           fontSize: 13, cursor: "pointer", outline: "none", minWidth: 140, minHeight: 36
-                         }}
-                       >
-                         {seriesList.map((s) => (
-                           <option key={s.id} value={s.id}>{s.name}</option>
-                         ))}
-                       </select>
-                      </div>
-                      <Link href={`/reader/${book.id}`} style={{ padding: "4px 12px", borderRadius: 6, background: "var(--accent)", color: "#fff", textDecoration: "none", fontSize: 12, fontWeight: 600 }}>
-                       Читать
-                     </Link>
-                     <Link href={`/book/${book.id}`} style={{ padding: "4px 12px", borderRadius: 6, background: "var(--accent-light)", color: "var(--accent)", textDecoration: "none", fontSize: 12, fontWeight: 500 }}>
-                       Карточка
-                     </Link>
-                    {book.has_structure && (
-                      <button onClick={() => openEditor(book)} style={btn("transparent", "var(--text-muted)", { fontSize: 12 })}>✏️</button>
-                    )}
-                    {book.has_structure && (
-                      <button onClick={() => apiDownloadVblite(book.id)} title="Скачать vblite" style={btn("transparent", "var(--text-muted)", { fontSize: 12 })}>💾</button>
-                    )}
-                    <button onClick={() => handleDelete(book.id)} style={btn("transparent", "var(--text-muted)", { fontSize: 12 })}>🗑</button>
-                  </div>
-                </div>
+                     <div style={{ flex: 1, minWidth: 0 }}>
+                       <Link href={`/book/${book.id}`} style={{ fontWeight: 500, color: "var(--text-primary)", textDecoration: "none", fontSize: 15 }}>
+                         {book.title}
+                         {isVox && (
+                           <span style={{ marginLeft: 8, fontSize: 10, padding: "1px 6px", borderRadius: 4, background: "var(--accent-light)", color: "var(--accent)", fontWeight: 600 }}>
+                             VOXBOOK
+                           </span>
+                         )}
+                       </Link>
+<div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <span style={{ fontWeight: 500 }}>{book.formats?.map((f: string) => f.toUpperCase()).join(", ") || book.filename.split('.').pop()?.toUpperCase()}</span>
+                         {book.series_names.length > 0 && (
+                           <span style={{ color: "var(--accent)", fontWeight: 500 }}>{book.series_names.join(", ")}</span>
+                         )}
+                       </div>
+                     </div>
+                   </div>
+<div style={{ display: "flex", gap: 6, marginLeft: 16, alignItems: "center", flexWrap: "wrap" }}>
+                      <Link href={`/reader/${book.id}`} style={{ padding: "6px 14px", borderRadius: 6, background: "var(--accent)", color: "#fff", textDecoration: "none", fontSize: 12, fontWeight: 600 }}>
+                        Читать
+                      </Link>
+                      <button onClick={() => { const newTitle = prompt("Новое название:", book.title); if (newTitle && newTitle !== book.title) { apiRenameBook(book.id, newTitle).then(() => loadBooks()).catch((e: any) => alert(e.message)); }}} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-tertiary)", color: "var(--text-secondary)", fontSize: 12, cursor: "pointer" }}>
+                        ✏️
+                      </button>
+                      <button onClick={() => openFormatModal(book)} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-tertiary)", color: "var(--text-secondary)", fontSize: 12, cursor: "pointer" }}>
+                        📥 Форматы
+                      </button>
+                      <button onClick={() => handleDelete(book.id)} style={{ padding: "6px 14px", borderRadius: 6, border: "none", background: "var(--error)", color: "#fff", fontSize: 12, cursor: "pointer" }}>
+                        🗑
+                      </button>
+                    </div>
+                 </div>
               );
             })}
           </div>
@@ -1085,6 +1159,110 @@ export default function ProfilePage() {
                   } catch (err: any) { alert(err.message); }
                 }} disabled={!newSeriesName.trim()} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "var(--accent)", color: "#fff", cursor: newSeriesName.trim() ? "pointer" : "not-allowed" }}>Создать</button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Format Download Modal */}
+        {showFormatModal && formatModalBook && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={() => setShowFormatModal(null)}>
+            <div style={{ background: "var(--bg-secondary)", padding: 24, borderRadius: 12, width: "90%", maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
+              <h3 style={{ marginBottom: 16, fontSize: 18, fontWeight: 600 }}>Форматы "{formatModalBook.title}"</h3>
+              
+              {/* Скачать */}
+              <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>Скачать:</p>
+              {formatModalBook?.formats?.length > 0 ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 16 }}>
+                  {formatModalBook.formats.includes("fb2") && (
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <button onClick={() => apiDownloadBook(formatModalBook.id, "fb2")} style={{ flex: 1, padding: "10px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-primary)", cursor: "pointer", textAlign: "left" }}>
+                        📖 .fb2
+                      </button>
+                      {formatModalBook.formats.length > 1 && (
+                        <button onClick={() => handleDeleteFormat("fb2")} style={{ padding: "8px", borderRadius: 4, border: "none", background: "var(--error-light)", color: "var(--error)", cursor: "pointer", fontSize: 12 }}>🗑</button>
+                      )}
+                    </div>
+                  )}
+                  {formatModalBook.formats.includes("epub") && (
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <button onClick={() => apiDownloadBook(formatModalBook.id, "epub")} style={{ flex: 1, padding: "10px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-primary)", cursor: "pointer", textAlign: "left" }}>
+                        📖 .epub
+                      </button>
+                      {formatModalBook.formats.length > 1 && (
+                        <button onClick={() => handleDeleteFormat("epub")} style={{ padding: "8px", borderRadius: 4, border: "none", background: "var(--error-light)", color: "var(--error)", cursor: "pointer", fontSize: 12 }}>🗑</button>
+                      )}
+                    </div>
+                  )}
+                  {formatModalBook.formats.includes("txt") && (
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <button onClick={() => apiDownloadBook(formatModalBook.id, "txt")} style={{ flex: 1, padding: "10px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-primary)", cursor: "pointer", textAlign: "left" }}>
+                        📖 .txt
+                      </button>
+                      {formatModalBook.formats.length > 1 && (
+                        <button onClick={() => handleDeleteFormat("txt")} style={{ padding: "8px", borderRadius: 4, border: "none", background: "var(--error-light)", color: "var(--error)", cursor: "pointer", fontSize: 12 }}>🗑</button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ padding: 12, textAlign: "center", color: "var(--text-muted)", marginBottom: 16 }}>Нет форматов</div>
+              )}
+
+              {/* Формат по умолчанию */}
+              <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8, marginTop: 16 }}>Формат по умолчанию:</p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {formatModalBook?.formats?.map((format: string) => (
+                  <button
+                    key={format}
+                    onClick={() => handleSetPreferredFormat(format)}
+                    style={{
+                      padding: "8px 12px",
+                      borderRadius: 6,
+                      border: formatModalBook?.preferred_format === format ? "2px solid var(--accent)" : "1px solid var(--border)",
+                      background: formatModalBook?.preferred_format === format ? "var(--accent-light)" : "var(--bg-primary)",
+                      color: "var(--text-primary)",
+                      cursor: "pointer",
+                      textAlign: "left",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                    }}
+                  >
+                    <span style={{ color: formatModalBook?.preferred_format === format ? "var(--accent)" : "var(--text-muted)" }}>
+                      {formatModalBook?.preferred_format === format ? "✓" : "○"}
+                    </span>
+                    <span style={{ textTransform: "uppercase" }}>{format}</span>
+                    {formatModalBook?.preferred_format === format && (
+                      <span style={{ fontSize: 11, color: "var(--accent)", marginLeft: "auto" }}>по умолчанию</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+              
+              {/* Добавить формат */}
+              <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>Добавить формат:</p>
+              <input
+                type="file"
+                accept=".fb2,.epub,.txt"
+                ref={formatFileRef}
+                onChange={(e) => setFormatFile(e.target.files?.[0] || null)}
+                style={{ display: "none" }}
+              />
+              <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+                <button
+                  onClick={() => formatFileRef.current?.click()}
+                  style={{ flex: 1, padding: "10px", borderRadius: 6, border: "1px dashed var(--border)", background: "var(--bg-primary)", color: "var(--text-secondary)", cursor: "pointer", textAlign: "center" }}
+                >
+                  {formatFile ? formatFile.name : "Выбрать файл..."}
+                </button>
+                {formatFile && (
+                  <button onClick={handleAddFormat} disabled={formatUploading} style={{ padding: "10px 16px", borderRadius: 6, border: "none", background: "var(--accent)", color: "#fff", cursor: formatUploading ? "wait" : "pointer" }}>
+                    {formatUploading ? "..." : "Загрузить"}
+                  </button>
+                )}
+              </div>
+              
+              <button onClick={() => setShowFormatModal(null)} style={{ width: "100%", padding: "10px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-tertiary)", color: "var(--text-secondary)", cursor: "pointer", marginTop: 12 }}>Закрыть</button>
             </div>
           </div>
         )}

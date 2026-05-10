@@ -2,7 +2,13 @@ import io
 import logging
 import os
 import sys
+from pathlib import Path
 from contextlib import asynccontextmanager
+
+# Добавляем корень проекта в путь импорта (для tts/ из корня)
+_project_root = str(Path(__file__).resolve().parent.parent)
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,12 +18,33 @@ from database import init_db, SessionLocal, User
 from auth import router as auth_router, require_user, get_current_user, hash_password
 from books import router as books_router
 from tts import get_tts_service, TTSService
+from config import TTS_MAX_LENGTH, TTS_CHUNK_SIZE
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 logger = logging.getLogger("fox-reader")
+
+# ============================================================================
+# CORS Configuration - Restrict Origins
+# ============================================================================
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development").lower()
+ALLOWED_ORIGINS_STR = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
+ALLOWED_ORIGINS = [origin.strip() for origin in ALLOWED_ORIGINS_STR.split(",")]
+
+# Validate CORS configuration in production
+if ENVIRONMENT == "production":
+    if "*" in ALLOWED_ORIGINS:
+        logger.critical("SECURITY ERROR: CORS wildcard '*' is not allowed in production")
+        raise RuntimeError(
+            "CORS misconfiguration: cannot use wildcard '*' in production. "
+            "Set ALLOWED_ORIGINS to specific domains (e.g., 'https://example.com,https://www.example.com')"
+        )
+    if "localhost" in str(ALLOWED_ORIGINS):
+        logger.warning("WARNING: localhost in ALLOWED_ORIGINS in production - verify this is intentional")
+else:
+    logger.info(f"CORS allowed origins (dev): {ALLOWED_ORIGINS}")
 
 
 def _seed_admin():
@@ -58,10 +85,11 @@ app = FastAPI(title="Fox Reader", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["authorization", "content-type"],
+    max_age=600,
 )
 
 app.include_router(auth_router)
@@ -85,8 +113,8 @@ async def synthesize_speech(
     voice_type = payload.get("voice_type", getattr(user, "preferred_voice", "default"))
     if not text:
         raise HTTPException(status_code=400, detail="No text provided")
-    if len(text) > 5000:
-        text = text[:5000]
+    if len(text) > TTS_MAX_LENGTH:
+        text = text[:TTS_MAX_LENGTH]
 
     try:
         service = get_tts_service()
@@ -125,8 +153,8 @@ async def synthesize_chunk(
     
     if not text:
         raise HTTPException(status_code=400, detail="No text provided")
-    if len(text) > 1000:
-        text = text[:1000]
+    if len(text) > TTS_CHUNK_SIZE:
+        text = text[:TTS_CHUNK_SIZE]
 
     try:
         service = get_tts_service()

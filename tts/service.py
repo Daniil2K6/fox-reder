@@ -85,3 +85,31 @@ def get_voices(engine: Optional[str] = None) -> dict:
     else:
         from .cloud import get_voices as get_cloud_voices
         return get_cloud_voices()
+
+
+# ============================================================================
+# Singleton для обратной совместимости
+# ============================================================================
+_instance = None
+
+def get_tts_service() -> 'TTSService':
+    """Получить экземпляр TTS сервиса"""
+    global _instance
+    if _instance is None:
+        _instance = _TTSService()
+    return _instance
+
+
+class TTSService:
+    """Класс TTS сервиса - для совместимости"""
+    
+    def __init__(self):
+        self.engine = "cloud"
+    
+    async def synthesize(self, text: str, **kwargs) -> bytes:
+        from .cloud import synthesize as cloud_synthesize
+        return await cloud_synthesize(text, **kwargs)
+
+
+class _TTSService(TTSService):
+    pass

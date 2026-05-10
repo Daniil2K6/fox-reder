@@ -1,9 +1,12 @@
+import logging
 import os
 from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, DateTime, Boolean, ForeignKey, Text, UniqueConstraint, create_engine, text, Table, Float
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
+
+logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./fox_reader.db")
 
@@ -77,6 +80,8 @@ class Book(Base):
      original_language = Column(String(16), default="en", nullable=False)  # ISO 639-1 (en, ru, ja, etc.)
      is_translated = Column(Boolean, default=False)  # Флаг: содержит ли переводы
      view_count = Column(Integer, default=0)
+     group_id = Column(String(64), nullable=True)  # Group ID for multi-format books
+     preferred_format = Column(String(16), nullable=True)  # Default format for download
 
      owner = relationship("User", back_populates="books")
      series_list = relationship("Series", secondary=book_series_association, back_populates="books")
@@ -86,6 +91,20 @@ class Book(Base):
      __table_args__ = (
          UniqueConstraint("owner_id", "sha256", name="uq_owner_sha256"),
      )
+
+
+class BookVersion(Base):
+    __tablename__ = "book_versions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    book_id = Column(Integer, ForeignKey("books.id"), nullable=False)
+    format = Column(String(16), nullable=False)  # fb2, epub, txt, vb, vblite
+    file_path = Column(String(1024), nullable=False)
+    sha256 = Column(String(64), nullable=False, index=True)
+    filename = Column(String(512), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    book = relationship("Book", backref="versions")
 
 
 class Like(Base):
@@ -171,8 +190,17 @@ def init_db():
         for sql in migrations:
             try:
                 conn.execute(text(sql))
-            except Exception:
-                pass
+            except Exception as e:
+                # Log migration issues, but only fail if it's not "already exists" type error
+                error_msg = str(e).lower()
+                if any(phrase in error_msg for phrase in ["already exists", "duplicate", "unique constraint"]):
+                    # These are expected for idempotent migrations
+                    logger.debug(f"Migration already applied: {sql[:80]}...")
+                else:
+                    # Unexpected error - log and fail startup
+                    logger.error(f"MIGRATION ERROR: {sql}")
+                    logger.error(f"Error details: {e}")
+                    raise RuntimeError(f"Database migration failed: {e}") from e
         conn.commit()
 
 

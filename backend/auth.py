@@ -1,3 +1,4 @@
+import logging
 import os
 from datetime import datetime, timedelta
 from typing import Optional
@@ -11,7 +12,24 @@ from sqlalchemy.orm import Session
 
 from database import get_db, User
 
-SECRET_KEY = os.getenv("SECRET_KEY", "fox-reader-secret-change-in-production-2026")
+logger = logging.getLogger(__name__)
+
+# CRITICAL: Fail startup if SECRET_KEY not set in production
+SECRET_KEY = os.getenv("SECRET_KEY")
+
+if not SECRET_KEY:
+    if os.getenv("ENVIRONMENT", "development").lower() == "production":
+        logger.critical("SECURITY ERROR: SECRET_KEY environment variable must be set in production")
+        raise RuntimeError(
+            "CRITICAL SECURITY ERROR: SECRET_KEY environment variable is not set. "
+            "This is required in production. "
+            "Set it with: export SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+        )
+    else:
+        # Development mode: use insecure default only locally
+        logger.warning("⚠️  Using development SECRET_KEY - INSECURE for production")
+        SECRET_KEY = "dev-only-insecure-secret-change-before-deploying-2026"
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 

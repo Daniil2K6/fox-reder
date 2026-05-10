@@ -65,8 +65,9 @@ export default function SeriesPage() {
     <div style={{ minHeight: "100vh", background: "var(--bg-primary)", display: "flex", flexDirection: "column" }}>
       <Navbar 
         breadcrumbs={[
+          { label: "Главная", href: "/" },
           { label: "Библиотека", href: "/public" },
-          { label: series.name },
+          { label: series.author || "Автор" },
         ]}
       />
 

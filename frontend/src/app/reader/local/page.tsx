@@ -35,6 +35,7 @@ interface Paragraph {
   bold: boolean;
   italic: boolean;
   color: string | null;
+  image?: string;
 }
 
 interface Chapter {
@@ -50,6 +51,7 @@ interface StructuredData {
   author: string;
   toc: TocItem[];
   chapters: Chapter[];
+  images?: Record<string, string>;
 }
 
 type ViewMode = "continuous" | "chapter";
@@ -375,8 +377,9 @@ export default function LocalReaderPage() {
       setTtsState("playing");
       await audio.play();
     } catch (err: any) {
-      setError(`TTS: ${err.message}`);
-      playQueueItem();
+      console.error("TTS error:", err);
+      setError(`TTS: ${err.message || err}`);
+      stopSpeaking();
     }
   }, [language, stopSpeaking]);
 
@@ -868,6 +871,11 @@ export default function LocalReaderPage() {
                       <span style={{ fontWeight: 600, color: "var(--accent)", fontSize: "0.85em", marginRight: 6 }}>
                         [{typeof para.character === 'string' ? para.character : (para.character as any).name}]
                       </span>
+                    )}
+                    {(para as any).image && (
+                      <div style={{ padding: 20, textAlign: "center", color: "var(--text-muted)", fontSize: 12 }}>
+                        [Image: {(para as any).image}]
+                      </div>
                     )}
                     {para.text}
                   </p>

@@ -25,6 +25,7 @@ import {
   apiListSeries,
   apiAdminDeleteBook,
   apiAdminToggleBookVisibility,
+  apiDownloadFormat,
 } from "@/lib/api";
 import { GenreSelector } from "@/components/GenreSelector";
 
@@ -48,6 +49,7 @@ export default function BookPage({ params }: { params: { id: string } }) {
   const [showSeriesModal, setShowSeriesModal] = useState(false);
   const [bookSeries, setBookSeries] = useState<number[]>([]);
   const [allSeries, setAllSeries] = useState<any[]>([]);
+  const [showDownloadModal, setShowDownloadModal] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -70,6 +72,14 @@ export default function BookPage({ params }: { params: { id: string } }) {
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!book || !getToken()) return;
+    const u = getUser();
+    if (u && u.id && u.id === book.owner_id) {
+      apiListSeries().then((list) => setAllSeries(list)).catch(() => {});
+    }
+  }, [book?.id, book?.owner_id]);
 
   const loadData = async () => {
     try {
@@ -228,6 +238,7 @@ export default function BookPage({ params }: { params: { id: string } }) {
   }
 
   const breadcrumbs = [
+    { label: "Главная", href: "/" },
     { label: "Библиотека", href: "/public" },
     ...(book?.series_names?.length ? [{ label: book.series_names[0], href: `/series/${book.series_ids?.[0]}` }] : []),
     { label: book?.title || "Книга" },
@@ -275,10 +286,16 @@ export default function BookPage({ params }: { params: { id: string } }) {
                 ))}
               </div>
             )}
-            <p style={{ color: "var(--text-secondary)", marginBottom: 4 }}>Формат: {book?.filename.split('.').pop()?.toLowerCase() ? '.' + book?.filename.split('.').pop()?.toLowerCase() : ''}</p>
+            <p style={{ color: "var(--text-secondary)", marginBottom: 4 }}>Формат: {book?.formats?.join(", ") || book?.filename.split('.').pop()?.toUpperCase()}</p>
             <p style={{ color: "var(--text-secondary)", marginBottom: 4 }}>Владелец: {book?.owner_username}</p>
             <p style={{ color: "var(--text-secondary)", marginBottom: 8 }}>Главы: {book?.has_structure ? "Да" : "Нет"}</p>
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12 }}>
+              <button onClick={() => router.push(`/reader/${bookId}`)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-secondary)", cursor: "pointer", fontSize: 14, color: "var(--accent)" }}>
+                📖 Читать
+              </button>
+              <button onClick={() => setShowDownloadModal(true)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-secondary)", cursor: "pointer", fontSize: 14, color: "var(--text-secondary)" }}>
+                ⬇️ Скачать
+              </button>
               <button onClick={handleLike} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-secondary)", cursor: "pointer", fontSize: 14, color: book?.is_liked ? "red" : "var(--text-secondary)" }}>
                 {book?.is_liked ? "❤️" : "🤍"} {book?.like_count || 0}
               </button>
@@ -399,6 +416,29 @@ export default function BookPage({ params }: { params: { id: string } }) {
               {allSeries.length === 0 && <p style={{ color: "var(--text-muted)", textAlign: "center" }}>Нет серий</p>}
             </div>
             <button onClick={async () => { await apiAssignToSeries(bookId, bookSeries); loadData(); setShowSeriesModal(false); }} style={{ marginTop: 16, width: "100%", padding: "10px", borderRadius: 8, background: "var(--accent)", color: "#fff", border: "none", cursor: "pointer" }}>Сохранить</button>
+          </div>
+        </div>
+      )}
+
+      {showDownloadModal && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+          <div style={{ background: "var(--bg-secondary)", padding: 24, borderRadius: 12, width: "90%", maxWidth: 400 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <h2 style={{ fontSize: 18, fontWeight: 600 }}>Скачать книгу</h2>
+              <button onClick={() => setShowDownloadModal(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "var(--text-muted)" }}>✕</button>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {book?.formats?.map((format: string) => (
+                <button key={format} onClick={async () => { const blob = await apiDownloadFormat(bookId, format); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `${book?.title || "book"}.${format}`; a.click(); URL.revokeObjectURL(url); setShowDownloadModal(false); }} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-tertiary)", cursor: "pointer", textAlign: "left" }}>
+                  <span style={{ fontSize: 20 }}>📄</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}>.{format}</div>
+                    <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{format === book?.filename?.split('.').pop() ? 'Основной файл' : 'Альтернативный формат'}</div>
+                  </div>
+                  <span style={{ color: "var(--accent)" }}>⬇️</span>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}
