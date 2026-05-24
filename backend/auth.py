@@ -43,6 +43,11 @@ class UserCreate(BaseModel):
     username: str
     password: str
 
+    class Config:
+        json_schema_extra = {
+            "example": {"username": "user", "password": "pass"}
+        }
+
 
 class Token(BaseModel):
     access_token: str
@@ -117,6 +122,10 @@ def require_admin(user: User = Depends(require_user)) -> User:
 
 @router.post("/register", response_model=Token)
 def register(data: UserCreate, db: Session = Depends(get_db)):
+    if len(data.username) < 2:
+        raise HTTPException(status_code=400, detail="Имя пользователя должно быть не менее 2 символов")
+    if len(data.username) > 24:
+        raise HTTPException(status_code=400, detail="Имя пользователя должно быть не более 24 символов")
     if db.query(User).filter(User.username == data.username).first():
         raise HTTPException(status_code=400, detail="Username already taken")
     user = User(username=data.username, hashed_password=hash_password(data.password), role="user")
@@ -150,6 +159,42 @@ def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get
         is_plus=user.is_plus,
         is_banned=user.is_banned,
     )
+
+
+@router.put("/profile")
+def update_profile(
+    payload: dict,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    current_password = payload.get("current_password", "")
+    if not verify_password(current_password, user.hashed_password):
+        raise HTTPException(status_code=403, detail="Неверный текущий пароль")
+
+    new_username = payload.get("username", "").strip()
+    new_password = payload.get("new_password", "").strip()
+
+    if new_username and new_username != user.username:
+        if db.query(User).filter(User.username == new_username).first():
+            raise HTTPException(status_code=400, detail="Имя пользователя уже занято")
+        user.username = new_username
+
+    if new_password:
+        user.hashed_password = hash_password(new_password)
+
+    db.commit()
+    db.refresh(user)
+
+    new_token = create_access_token({"sub": user.username})
+
+    return {
+        "id": user.id,
+        "username": user.username,
+        "role": user.role,
+        "is_plus": user.is_plus,
+        "access_token": new_token,
+        "token_type": "bearer",
+    }
 
 
 @router.get("/me", response_model=UserOut)

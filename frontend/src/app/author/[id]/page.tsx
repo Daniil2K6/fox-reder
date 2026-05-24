@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { getUser, clearToken, clearUser, getTheme, setTheme, apiAuthor, apiGetCoverUrl, apiGetSeriesCoverUrl, apiSubscribe, apiUnsubscribe, apiGetAvatarUrl, apiAdminBanUser, apiAdminDeleteUser } from "@/lib/api";
+import { getUser, clearToken, clearUser, getTheme, setTheme, apiAuthor, apiGetCoverUrl, apiGetSeriesCoverUrl, apiSubscribe, apiUnsubscribe, apiGetAvatarUrl, apiAdminBanUser, apiAdminDeleteUser, apiAdminUpdateUser } from "@/lib/api";
 import { Navbar } from "@/components/Navbar";
 
 export default function AuthorPage() {
@@ -14,6 +14,9 @@ export default function AuthorPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [user, setUserState] = useState<any>(null);
+  const [editUserOpen, setEditUserOpen] = useState(false);
+  const [editUsername, setEditUsername] = useState("");
+  const [editPassword, setEditPassword] = useState("");
 
   useEffect(() => {
     setUserState(getUser());
@@ -51,6 +54,26 @@ export default function AuthorPage() {
     try {
       await apiAdminDeleteUser(author.id);
       router.push("/public");
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleEditUserOpen = () => {
+    setEditUsername(author.username);
+    setEditPassword("");
+    setEditUserOpen(true);
+  };
+
+  const handleSaveUserEdit = async () => {
+    try {
+      const data: any = {};
+      if (editUsername !== author.username) data.username = editUsername;
+      if (editPassword) data.password = editPassword;
+      if (Object.keys(data).length === 0) { setEditUserOpen(false); return; }
+      await apiAdminUpdateUser(author.id, data);
+      setEditUserOpen(false);
+      await loadData();
     } catch (err: any) {
       alert(err.message);
     }
@@ -120,13 +143,20 @@ export default function AuthorPage() {
                 {author.is_subscribed ? "Отписаться" : "Подписаться"}
               </button>
               
-              {isAdmin && user.id !== author.id && (
+              {isAdmin && (
                 <div style={{ display: "flex", gap: 8, marginLeft: 8 }}>
-                  <button onClick={handleBanUser} style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid", borderColor: author.is_banned ? "#22c55e" : "#ef4444", background: "transparent", color: author.is_banned ? "#22c55e" : "#ef4444", fontSize: 13, fontWeight: 500, cursor: "pointer" }}>
-                    {author.is_banned ? "Разбанить" : "Забанить"}
-                  </button>
-                  <button onClick={handleDeleteUser} style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid #ef4444", background: "transparent", color: "#ef4444", fontSize: 13, fontWeight: 500, cursor: "pointer" }}>
-                    Удалить
+                  {user.id !== author.id && (
+                    <>
+                      <button onClick={handleBanUser} style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid", borderColor: author.is_banned ? "#22c55e" : "#ef4444", background: "transparent", color: author.is_banned ? "#22c55e" : "#ef4444", fontSize: 13, fontWeight: 500, cursor: "pointer" }}>
+                        {author.is_banned ? "Разбанить" : "Забанить"}
+                      </button>
+                      <button onClick={handleDeleteUser} style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid #ef4444", background: "transparent", color: "#ef4444", fontSize: 13, fontWeight: 500, cursor: "pointer" }}>
+                        Удалить
+                      </button>
+                    </>
+                  )}
+                  <button onClick={handleEditUserOpen} style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-tertiary)", color: "var(--text-primary)", fontSize: 13, fontWeight: 500, cursor: "pointer" }}>
+                    ✏️ Редактировать
                   </button>
                 </div>
               )}
@@ -195,6 +225,28 @@ export default function AuthorPage() {
           )}
         </div>
       </div>
+
+      {editUserOpen && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+          <div style={{ background: "var(--bg-secondary)", padding: 24, borderRadius: 12, width: "90%", maxWidth: 400 }}>
+            <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 16 }}>Редактировать пользователя</h2>
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ display: "block", fontSize: 13, color: "var(--text-secondary)", marginBottom: 4 }}>Имя пользователя</label>
+              <input value={editUsername} onChange={(e) => setEditUsername(e.target.value)}
+                style={{ width: "100%", padding: "10px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: 14, boxSizing: "border-box" }} />
+            </div>
+            <div style={{ marginBottom: 20 }}>
+              <label style={{ display: "block", fontSize: 13, color: "var(--text-secondary)", marginBottom: 4 }}>Новый пароль (оставьте пустым, чтобы не менять)</label>
+              <input type="password" value={editPassword} onChange={(e) => setEditPassword(e.target.value)} placeholder="Новый пароль"
+                style={{ width: "100%", padding: "10px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: 14, boxSizing: "border-box" }} />
+            </div>
+            <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
+              <button onClick={() => setEditUserOpen(false)} style={{ padding: "8px 16px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-tertiary)", cursor: "pointer" }}>Отмена</button>
+              <button onClick={handleSaveUserEdit} style={{ padding: "8px 16px", borderRadius: 6, border: "none", background: "var(--accent)", color: "#fff", cursor: "pointer" }}>Сохранить</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

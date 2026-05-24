@@ -228,53 +228,264 @@ def parse_vb(file_path: str) -> dict:
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
         raise ValueError(f"Invalid VoxBook JSON: {e}")
 
-    format_version = data.get("format_version", "unknown")
+    format_version = data.get("format_version") or data.get("format", "unknown")
+    title = data.get("title") or data.get("metadata", {}).get("title", "Untitled")
+    author = data.get("author") or data.get("metadata", {}).get("author", "Unknown")
+
     chapters = []
     toc = []
 
-    content_blocks = data.get("content", [])
-    for chapter_idx, chapter in enumerate(content_blocks):
+    # Support both old (content[]) and new (chapters[]) formats
+    raw_chapters = data.get("chapters") or data.get("content", [])
+
+    for chapter_idx, chapter in enumerate(raw_chapters):
         chapter_title = chapter.get("title", f"Chapter {chapter_idx + 1}")
         chapter_id = f"ch-{chapter_idx}"
         toc.append({"id": chapter_id, "title": chapter_title, "index": chapter_idx})
 
         paragraphs = []
-        blocks = chapter.get("content", [])
+        # Support both old (content[]) and new (paragraphs[]) paragraph lists
+        blocks = chapter.get("paragraphs") or chapter.get("content", [])
         for block_idx, block in enumerate(blocks):
             text = block.get("text", "")
             if not text:
                 continue
 
             character = block.get("character")
+            # Normalise old format (string) to new format (object with name+gender)
+            if isinstance(character, str):
+                from fb2_to_vblite import determine_gender
+                character = {"name": character, "gender": determine_gender(character)}
 
             ai = block.get("ai", {}) or {}
             if character is None:
-                character = ai.get("character")
-            emotion = ai.get("emotion")
+                ai_char = ai.get("character")
+                if isinstance(ai_char, dict):
+                    character = ai_char
+                elif isinstance(ai_char, str):
+                    from fb2_to_vblite import determine_gender
+                    character = {"name": ai_char, "gender": determine_gender(ai_char)}
+            emotion = ai.get("emotion") or block.get("emotion")
             style = block.get("style", {}) or {}
 
             paragraphs.append({
-                "id": f"{chapter_id}-p-{block_idx}",
+                "id": block.get("id") or f"{chapter_id}-p-{block_idx}",
                 "text": text,
                 "character": character,
                 "emotion": emotion,
-                "bold": style.get("bold", False),
-                "italic": style.get("italic", False),
-                "color": style.get("color"),
+                "bold": style.get("bold", block.get("bold", False)),
+                "italic": style.get("italic", block.get("italic", False)),
+                "color": style.get("color", block.get("color")),
             })
 
         chapters.append({
-            "id": chapter_id,
+            "id": chapter.get("id") or chapter_id,
             "title": chapter_title,
-            "index": chapter_idx,
+            "index": chapter.get("index") or chapter_idx,
             "paragraphs": paragraphs,
         })
 
     return {
         "format_version": format_version,
-        "title": data.get("title", "Untitled"),
-        "author": data.get("author", "Unknown"),
+        "title": title,
+        "author": author,
         "toc": toc,
+        "chapters": chapters,
+    }
+
+
+def parse_epub(file_path: str) -> dict:
+    """Parse EPUB file and return structured content with chapters and TOC."""
+    import ebooklib
+    from ebooklib import epub
+    from bs4 import BeautifulSoup, NavigableString
+    import os
+
+    try:
+        book = epub.read_epub(file_path)
+    except Exception as e:
+        logger.error(f"Failed to read EPUB {file_path}: {e}")
+        filename = os.path.basename(file_path)
+        title = os.path.splitext(filename)[0]
+        return {
+            "format_version": "epub",
+            "title": title,
+            "author": "",
+            "toc": [],
+            "chapters": [],
+        }
+
+    title = "Untitled"
+    author = "Unknown"
+    try:
+        dc_title = book.get_metadata('DC', 'title')
+        if dc_title and dc_title[0]:
+            title = dc_title[0][0]
+        dc_creator = book.get_metadata('DC', 'creator')
+        if dc_creator and dc_creator[0]:
+            author = dc_creator[0][0]
+    except Exception:
+        pass
+
+    items_map = {}
+    for item in book.get_items():
+        href = getattr(item, 'file_name', None) or ''
+        if href:
+            items_map[href] = item
+            items_map[os.path.basename(href)] = item
+        href2 = getattr(item, 'href', None) or ''
+        if href2 and href2 != href:
+            items_map[href2] = item
+            items_map[os.path.basename(href2)] = item
+
+    chapters = []
+    toc_list = []
+    chapter_idx = [0]
+    processed_hrefs = set()
+
+    def extract_paragraphs(soup):
+        paragraphs = []
+        for child in soup.children:
+            if isinstance(child, NavigableString):
+                t = child.strip()
+                if t:
+                    paragraphs.append(t)
+                continue
+            if not hasattr(child, 'name') or child.name is None:
+                continue
+            if child.name in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'title'):
+                text = child.get_text(separator=" ", strip=True)
+                if text:
+                    paragraphs.append(text)
+            elif child.name in ('p', 'div'):
+                text = child.get_text(separator=" ", strip=True)
+                if text:
+                    paragraphs.append(text)
+            elif child.name in ('br', 'hr', 'sup', 'sub'):
+                continue
+            elif child.name in ('ul', 'ol'):
+                for li in child.find_all('li', recursive=False):
+                    text = li.get_text(separator=" ", strip=True)
+                    if text:
+                        paragraphs.append(text)
+            elif child.name == 'table':
+                for td in child.find_all('td'):
+                    text = td.get_text(separator=" ", strip=True)
+                    if text:
+                        paragraphs.append(text)
+            else:
+                sub = extract_paragraphs(child)
+                paragraphs.extend(sub)
+        return paragraphs
+
+    def make_paragraph_list(paragraphs, ch_id):
+        return [
+            {
+                "id": f"{ch_id}-p-{i}",
+                "text": p,
+                "character": None,
+                "emotion": None,
+                "bold": False,
+                "italic": False,
+                "color": None,
+            }
+            for i, p in enumerate(paragraphs) if p
+        ]
+
+    try:
+        toc_entries = book.toc
+        if toc_entries:
+            def process_toc(entries, parent_title=""):
+                for entry in entries:
+                    link = None
+                    children = []
+                    if isinstance(entry, tuple):
+                        link, children = entry
+                    elif hasattr(entry, 'href'):
+                        link = entry
+                    else:
+                        continue
+
+                    if not link or not link.href:
+                        continue
+
+                    href = link.href.split('#')[0]
+                    if href in processed_hrefs:
+                        continue
+
+                    item_obj = items_map.get(href)
+                    if not item_obj:
+                        try:
+                            item_obj = book.get_item_with_href(href)
+                        except Exception:
+                            pass
+
+                    if not item_obj:
+                        continue
+
+                    try:
+                        content = item_obj.get_content()
+                        soup = BeautifulSoup(content, "html.parser")
+                        body = soup.find('body') or soup
+                        paragraphs = extract_paragraphs(body)
+
+                        if paragraphs:
+                            ch_id = f"ch-{chapter_idx[0]}"
+                            ch_title = link.title or parent_title or f"Chapter {chapter_idx[0] + 1}"
+                            chapters.append({
+                                "id": ch_id,
+                                "title": ch_title,
+                                "index": chapter_idx[0],
+                                "paragraphs": make_paragraph_list(paragraphs, ch_id),
+                            })
+                            toc_list.append({"id": ch_id, "title": ch_title, "index": chapter_idx[0]})
+                            chapter_idx[0] += 1
+
+                        processed_hrefs.add(href)
+                    except Exception as e:
+                        logger.warning(f"Failed to parse EPUB item {href}: {e}")
+
+                    if children:
+                        process_toc(children, link.title or parent_title)
+
+            process_toc(toc_entries)
+    except Exception as e:
+        logger.warning(f"Failed to process EPUB TOC: {e}")
+
+    if not chapters:
+        try:
+            for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+                item_href = getattr(item, 'file_name', None) or ''
+                if item_href in processed_hrefs:
+                    continue
+                try:
+                    content = item.get_content()
+                    soup = BeautifulSoup(content, "html.parser")
+                    body = soup.find('body') or soup
+                    paragraphs = extract_paragraphs(body)
+                    if paragraphs:
+                        ch_id = f"ch-{chapter_idx[0]}"
+                        ch_title = os.path.splitext(os.path.basename(item_href))[0] if item_href else f"Chapter {chapter_idx[0] + 1}"
+                        chapters.append({
+                            "id": ch_id,
+                            "title": ch_title,
+                            "index": chapter_idx[0],
+                            "paragraphs": make_paragraph_list(paragraphs, ch_id),
+                        })
+                        toc_list.append({"id": ch_id, "title": ch_title, "index": chapter_idx[0]})
+                        chapter_idx[0] += 1
+                    if item_href:
+                        processed_hrefs.add(item_href)
+                except Exception as e:
+                    logger.warning(f"Failed to parse EPUB document: {e}")
+        except Exception as e:
+            logger.warning(f"Fallback EPUB parsing failed: {e}")
+
+    return {
+        "format_version": "epub",
+        "title": title,
+        "author": author,
+        "toc": toc_list,
         "chapters": chapters,
     }
 
@@ -426,19 +637,19 @@ def get_book_images(book_path: str, book_id: int) -> dict:
         return {}
 
 
-def extract_cover_from_file(file_path: str, output_dir: str) -> Optional[str]:
+def extract_cover_from_file(file_path: str, output_dir: str, book_id: int = 0) -> Optional[str]:
     """Extract cover image from FB2 or EPUB file. Returns cover filename or None."""
     ext = os.path.splitext(file_path)[1].lower()
     
     if ext == ".fb2":
-        return extract_cover_from_fb2(file_path, output_dir)
+        return extract_cover_from_fb2(file_path, output_dir, book_id)
     elif ext == ".epub":
-        return extract_cover_from_epub(file_path, output_dir)
+        return extract_cover_from_epub(file_path, output_dir, book_id)
     
     return None
 
 
-def extract_cover_from_fb2(file_path: str, output_dir: str) -> Optional[str]:
+def extract_cover_from_fb2(file_path: str, output_dir: str, book_id: int = 0) -> Optional[str]:
     """Extract cover from FB2 file and save to output_dir. Returns filename or None."""
     from lxml import etree
     import base64
@@ -484,7 +695,7 @@ def extract_cover_from_fb2(file_path: str, output_dir: str) -> Optional[str]:
                 if binary.text:
                     try:
                         image_data = base64.b64decode(binary.text)
-                        filename = f"cover{ext}"
+                        filename = f"cover_{book_id}{ext}"
                         out_path = os.path.join(output_dir, filename)
                         with open(out_path, "wb") as f:
                             f.write(image_data)
@@ -500,7 +711,7 @@ def extract_cover_from_fb2(file_path: str, output_dir: str) -> Optional[str]:
         return None
 
 
-def extract_cover_from_epub(file_path: str, output_dir: str) -> Optional[str]:
+def extract_cover_from_epub(file_path: str, output_dir: str, book_id: int = 0) -> Optional[str]:
     """Extract cover from EPUB file and save to output_dir. Returns filename or None."""
     import zipfile
     import xml.etree.ElementTree as ET
@@ -570,7 +781,7 @@ def extract_cover_from_epub(file_path: str, output_dir: str) -> Optional[str]:
                                 if ext not in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
                                     ext = ".jpg"
                                 
-                                filename = f"cover{ext}"
+                                filename = f"cover_{book_id}{ext}"
                                 out_path = os.path.join(output_dir, filename)
                                 with open(out_path, "wb") as f:
                                     f.write(cover_data)
@@ -586,7 +797,7 @@ def extract_cover_from_epub(file_path: str, output_dir: str) -> Optional[str]:
                     try:
                         cover_data = zf.read(name)
                         ext = os.path.splitext(name)[1].lower()
-                        filename = f"cover{ext}"
+                        filename = f"cover_{book_id}{ext}"
                         out_path = os.path.join(output_dir, filename)
                         with open(out_path, "wb") as f:
                             f.write(cover_data)

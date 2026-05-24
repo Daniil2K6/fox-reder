@@ -183,6 +183,7 @@ export default function ReaderPage() {
     const [volume, setVolume] = useState(0);
     const [highlightPara, setHighlightPara] = useState(-1);
     const [showCharacterLabels, setShowCharacterLabels] = useState(false);
+    const [showCharacterGender, setShowCharacterGender] = useState(false);
     const audioRef = useRef<HTMLAudioElement | null>(null);
     type TtsQueueItem = { text: string; paraIdx: number; character?: string | { name?: string; }; voiceType: string; pitch: number; rate: number; volume: number };
     const ttsQueueRef = useRef<TtsQueueItem[]>([]);
@@ -897,11 +898,19 @@ const paras = visibleParagraphs.slice(paraIdx).filter((p) => p.text.length > 0);
                        transition: "all 0.2s",
                      }}
                    >
-{showCharacterLabels && para.character && (
-                         <span style={{ fontWeight: 600, color: "var(--accent)", fontSize: "0.85em", marginRight: 6 }}>
-                           [{typeof para.character === 'string' ? para.character : (para.character as any).name}]
-                         </span>
-                       )}
+                        {showCharacterLabels && para.character && (
+                          <span style={{
+                            fontWeight: 600,
+                            color: (typeof para.character === 'object' && (para.character as any).name === 'действие')
+                              ? 'var(--text-muted)' : '#f59e0b',
+                            fontSize: "0.85em", marginRight: 6,
+                          }}>
+                            [{typeof para.character === 'string' ? para.character : (para.character as any).name}
+                            {showCharacterGender && typeof para.character === 'object' && (para.character as any).gender && (
+                              <> {(para.character as any).gender === 'female' ? 'Ж' : 'М'}</>
+                            )}]
+                          </span>
+                        )}
                       {/* Embedded image in paragraph */}
                       {(para as any).image && (
                         <img
@@ -1250,6 +1259,15 @@ const paras = visibleParagraphs.slice(paraIdx).filter((p) => p.text.length > 0);
                 fontSize: 12, cursor: "pointer",
               }}>
                 {showCharacterLabels ? "Скрыть метки" : "Показать метки"}
+              </button>
+              <button onClick={() => setShowCharacterGender(!showCharacterGender)} style={{
+                width: "100%", padding: "7px 0", borderRadius: 8, marginTop: 6,
+                border: "1px solid var(--border)",
+                background: showCharacterGender ? "var(--accent)" : "var(--bg-secondary)",
+                color: showCharacterGender ? "#fff" : "var(--text-primary)",
+                fontSize: 12, cursor: "pointer",
+              }}>
+                {showCharacterGender ? "Скрыть пол" : "Пол (М/Ж)"}
               </button>
             </div>
 

@@ -21,6 +21,7 @@ export function Navbar({ activeTab, hideTabs, breadcrumbs }: NavbarProps) {
   const [user, setUser] = useState<any>(null);
   const [theme, setThemeState] = useState("light");
   const [unreadCount, setUnreadCount] = useState(0);
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
 
   useEffect(() => {
     const u = getUser();
@@ -248,7 +249,7 @@ export function Navbar({ activeTab, hideTabs, breadcrumbs }: NavbarProps) {
                 {user.username}
               </span>
             </Link>
-            <button onClick={logout} style={{ 
+            <button onClick={() => setShowLogoutModal(true)} style={{ 
               padding: "6px 12px", 
               borderRadius: 8, 
               border: "1px solid var(--border)", 
@@ -282,6 +283,19 @@ export function Navbar({ activeTab, hideTabs, breadcrumbs }: NavbarProps) {
           </>
         )}
       </div>
+
+      {showLogoutModal && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 3000 }} onClick={() => setShowLogoutModal(false)}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--bg-secondary)", padding: 28, borderRadius: 14, width: "90%", maxWidth: 400 }}>
+            <h3 style={{ fontSize: 18, fontWeight: 600, marginBottom: 12 }}>Выход из аккаунта</h3>
+            <p style={{ fontSize: 14, color: "var(--text-secondary)", marginBottom: 24, lineHeight: 1.4 }}>Вы действительно хотите выйти из аккаунта?</p>
+            <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
+              <button onClick={() => setShowLogoutModal(false)} style={{ padding: "10px 20px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-tertiary)", color: "var(--text-primary)", cursor: "pointer", fontSize: 14 }}>Отмена</button>
+              <button onClick={() => { setShowLogoutModal(false); logout(); }} style={{ padding: "10px 20px", borderRadius: 8, border: "none", background: "var(--error)", color: "#fff", cursor: "pointer", fontSize: 14, fontWeight: 600 }}>Выйти</button>
+            </div>
+          </div>
+        </div>
+      )}
     </nav>
   );
 }

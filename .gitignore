@@ -58,6 +58,9 @@ WARNING.md
 # AI Assistant guide
 AI_ASSISTANT.md
 
+# Test folder
+test_folder/
+
 # Converter models
 converter/models/
 
@@ -66,4 +69,7 @@ converter/llama.cpp/build/
 
 # Build artifacts (TypeScript)
 frontend/tsconfig.tsbuildinfo
+
+# Server PID file
+backend/.server.pid
 

@@ -1,7 +1,7 @@
 import hashlib
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
@@ -11,9 +11,9 @@ from sqlalchemy import func, UniqueConstraint
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-from database import Series, Book, BookVersion, User, Comment, Like, Subscription, Notification, get_db
-from auth import require_user, get_current_user, require_admin
-from vb_parser import parse_vb, parse_fb2, extract_plain_text, extract_cover_from_file
+from database import Series, Book, BookVersion, User, Comment, Like, Subscription, BookSubscription, Notification, get_db
+from auth import require_user, get_current_user, require_admin, hash_password
+from vb_parser import parse_vb, parse_fb2, parse_epub, extract_plain_text, extract_cover_from_file
 from config import MAX_FILE_SIZE, MAX_FILE_SIZE_MB
 
 LIBRALI_DIR = os.path.join(os.path.dirname(__file__), "librali")
@@ -29,6 +29,14 @@ SERIES_DIR = os.path.join(LIBRALI_DIR, "series")
 AVATAR_DIR = os.path.join(LIBRALI_DIR, "avatars")
 
 SUPPORTED_EXTENSIONS = (".txt", ".fb2", ".epub", ".vb", ".vblite")
+
+
+def book_has_structure(book) -> bool:
+    """Check if book has structured content (cached or parseable on-the-fly)."""
+    if book.file_path and os.path.exists(book.file_path + ".struct.json"):
+        return True
+    ext = os.path.splitext(book.filename)[1].lower() if book.filename else ''
+    return ext in ('.fb2', '.epub', '.vb', '.vblite')
 
 
 def is_animated_image(content: bytes) -> bool:
@@ -89,6 +97,8 @@ class AuthorOut(BaseModel):
     total_comments: int = 0
     total_likes: int = 0
     avatar_url: Optional[str] = None
+    is_plus: bool = False
+    is_active: bool = False
 
     class Config:
         from_attributes = True
@@ -135,15 +145,10 @@ def extract_text(file_path: str, filename: str) -> tuple[str, Optional[str]]:
             structured = json.dumps(parsed, ensure_ascii=False)
             return plain, structured
         elif ext == ".epub":
-            import ebooklib
-            from ebooklib import epub
-            from bs4 import BeautifulSoup
-            book = epub.read_epub(file_path)
-            texts = []
-            for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
-                soup = BeautifulSoup(item.get_content(), "html.parser")
-                texts.append(soup.get_text(separator=" ", strip=True))
-            return "\n".join(texts), None
+            parsed = parse_epub(file_path)
+            plain = extract_plain_text(parsed["chapters"])
+            structured = json.dumps(parsed, ensure_ascii=False)
+            return plain, structured
         elif ext in (".vb", ".vblite"):
             parsed = parse_vb(file_path)
             plain = extract_plain_text(parsed["chapters"])
@@ -192,8 +197,23 @@ async def upload_book(
     sha256 = hashlib.sha256(content).hexdigest()
     print(f"Uploaded file SHA256: {sha256}")
 
-    book_title = title.strip() if title else os.path.splitext(file.filename)[0]
     book_format = ext.lstrip(".")
+    
+    # Try to extract title from file content if not provided
+    if not title:
+        book_title = os.path.splitext(file.filename)[0]
+        if ext in ('.vb', '.vblite'):
+            try:
+                import json as _json
+                text = content.decode('utf-8') if isinstance(content, bytes) else content
+                _meta = _json.loads(text)
+                _t = _meta.get('title') or _meta.get('metadata', {}).get('title')
+                if _t:
+                    book_title = _t
+            except Exception as e:
+                print(f"Warning: Could not extract title from {file.filename}: {e}")
+    else:
+        book_title = title.strip()
     
     # Check if adding as alternative format to existing book
     existing_book = None
@@ -243,7 +263,7 @@ async def upload_book(
         # Try to extract cover from this format if book doesn't have one
         if not existing_book.cover_image:
             try:
-                cover_filename = extract_cover_from_file(file_path, COVERS_DIR)
+                cover_filename = extract_cover_from_file(file_path, COVERS_DIR, existing_book.id)
                 if cover_filename:
                     existing_book.cover_image = cover_filename
                     db.commit()
@@ -304,7 +324,7 @@ async def upload_book(
             if existing_series:
                 book.series_list.append(existing_series)
             else:
-                new_series = Series(name=series_name)
+                new_series = Series(name=series_name, owner_id=user.id)
                 db.add(new_series)
                 db.flush()
                 book.series_list.append(new_series)
@@ -314,7 +334,7 @@ async def upload_book(
 
     # Extract cover from file
     try:
-        cover_filename = extract_cover_from_file(file_path, COVERS_DIR)
+        cover_filename = extract_cover_from_file(file_path, COVERS_DIR, book.id)
         if cover_filename and not book.cover_image:
             book.cover_image = cover_filename
             db.commit()
@@ -352,14 +372,10 @@ async def upload_book(
 
 @router.get("/my", response_model=List[BookOut])
 def my_books(user: User = Depends(require_user), db: Session = Depends(get_db)):
-    # Admins see all books, regular users see only their own
-    if user.role == "admin":
-        books = db.query(Book).order_by(Book.created_at.desc()).all()
-    else:
-        books = db.query(Book).filter(Book.owner_id == user.id).order_by(Book.created_at.desc()).all()
+    books = db.query(Book).filter(Book.owner_id == user.id).order_by(Book.created_at.desc()).all()
     result = []
     for b in books:
-        has_struct = os.path.exists(b.file_path + ".struct.json") if b.file_path else False
+        has_struct = book_has_structure(b)
         comment_count = db.query(Comment).filter(Comment.book_id == b.id).count()
         owner = db.query(User).filter(User.id == b.owner_id).first()
         result.append(BookOut(
@@ -431,7 +447,7 @@ def public_books(
     result = []
     for b in books:
         owner = db.query(User).filter(User.id == b.owner_id).first()
-        has_struct = os.path.exists(b.file_path + ".struct.json") if b.file_path else False
+        has_struct = book_has_structure(b)
         comment_count = db.query(Comment).filter(Comment.book_id == b.id).count()
         like_count = db.query(Like).filter(Like.book_id == b.id).count()
         is_liked = False
@@ -481,20 +497,101 @@ def hot_books(
     db: Session = Depends(get_db),
     user: Optional[User] = Depends(get_current_user),
 ):
-    """Get 5 random books from Plus users for hot books section."""
-    plus_users = db.query(User).filter(User.is_plus == True).all()
-    if not plus_users:
-        return []
-    plus_user_ids = [u.id for u in plus_users]
+    """5 newest public books from Plus users."""
+    plus_user_ids = db.query(User.id).filter(User.is_plus == True).subquery()
     books = db.query(Book).filter(
         Book.is_public == True,
         Book.owner_id.in_(plus_user_ids)
-    ).all()
-    if len(books) <= 5:
-        return [{"id": b.id, "title": b.title, "cover_image": b.cover_image, "owner_id": b.owner_id, "owner_username": b.owner.username if b.owner else "", "formats": [b.filename.split('.')[-1].lower()] + [v.format for v in b.versions]} for b in books]
-    import random
-    selected = random.sample(books, 5)
-    return [{"id": b.id, "title": b.title, "cover_image": b.cover_image, "owner_id": b.owner_id, "owner_username": b.owner.username if b.owner else "", "formats": [b.filename.split('.')[-1].lower()] + [v.format for v in b.versions]} for b in selected]
+    ).order_by(Book.created_at.desc()).limit(5).all()
+    return [{"id": b.id, "title": b.title, "cover_image": b.cover_image, "owner_id": b.owner_id, "owner_username": b.owner.username if b.owner else "", "formats": [b.filename.split('.')[-1].lower()] + [v.format for v in b.versions]} for b in books]
+
+
+@router.get("/public/top")
+def top_books(
+    db: Session = Depends(get_db),
+    user: Optional[User] = Depends(get_current_user),
+):
+    """Top 4 public books by popularity_score (deterministic)."""
+    books = db.query(Book).filter(Book.is_public == True).order_by(Book.popularity_score.desc()).limit(4).all()
+    if not books:
+        return []
+    result = []
+    for b in books:
+        owner = db.query(User).filter(User.id == b.owner_id).first()
+        has_struct = book_has_structure(b)
+        comment_count = db.query(Comment).filter(Comment.book_id == b.id).count()
+        like_count = b.like_count or 0
+        is_liked = False
+        is_subscribed = False
+        if user:
+            like = db.query(Like).filter(Like.user_id == user.id, Like.book_id == b.id).first()
+            is_liked = bool(like)
+            sub = db.query(BookSubscription).filter(BookSubscription.user_id == user.id, BookSubscription.book_id == b.id).first()
+            is_subscribed = bool(sub)
+        result.append({
+            "id": b.id, "title": b.title, "cover_image": b.cover_image,
+            "owner_id": b.owner_id, "owner_username": owner.username if owner else "unknown",
+            "like_count": like_count, "view_count": b.view_count or 0,
+            "is_liked": is_liked, "is_subscribed": is_subscribed,
+            "formats": [b.filename.split('.')[-1].lower()] + [v.format for v in b.versions],
+        })
+    return result
+
+
+@router.get("/unified-search")
+def unified_search(
+    q: str = Query("", min_length=1),
+    limit: int = Query(10, ge=1, le=50),
+    db: Session = Depends(get_db),
+    user: Optional[User] = Depends(get_current_user),
+):
+    """Search books, authors, and series in one query."""
+    if not q:
+        return {"results": []}
+
+    search_lower = q.lower()
+    results = []
+
+    # Authors
+    authors = db.query(User).filter(User.username.ilike(f"%{search_lower}%")).limit(limit).all()
+    for a in authors:
+        book_count = db.query(Book).filter(Book.owner_id == a.id, Book.is_public == True).count()
+        results.append({
+            "type": "author", "id": a.id, "name": a.username,
+            "avatar_url": a.avatar_url, "book_count": book_count,
+        })
+
+    # Series
+    series_list = db.query(Series).filter(Series.name.ilike(f"%{search_lower}%")).limit(limit).all()
+    for s in series_list:
+        owner = db.query(User).filter(User.id == s.owner_id).first()
+        book_count = len(s.books)
+        results.append({
+            "type": "series", "id": s.id, "name": s.name,
+            "owner_id": s.owner_id, "owner_username": owner.username if owner else "unknown",
+            "book_count": book_count, "cover_image": s.cover_image,
+        })
+
+    # Books — search only, no popularity bias
+    books = db.query(Book).filter(
+        Book.is_public == True,
+        (Book.title.ilike(f"%{search_lower}%")) |
+        (Book.description.ilike(f"%{search_lower}%")) |
+        (Book.genres.ilike(f"%{search_lower}%"))
+    ).limit(limit).all()
+    # exact title match first, then by id desc
+    books.sort(key=lambda b: (0 if b.title.lower() == search_lower else 1, -b.id))
+    for b in books:
+        owner = db.query(User).filter(User.id == b.owner_id).first()
+        results.append({
+            "type": "book", "id": b.id, "title": b.title,
+            "owner_id": b.owner_id, "owner_username": owner.username if owner else "unknown",
+            "cover_image": b.cover_image, "genres": b.genres,
+            "like_count": b.like_count or 0, "view_count": b.view_count or 0,
+            "formats": [b.filename.split('.')[-1].lower()] + [v.format for v in b.versions],
+        })
+
+    return {"results": results}
 
 
 @router.get("/search")
@@ -509,7 +606,6 @@ def search_books(
 
     result = []
     
-    # Simple substring search (works across databases)
     books = db.query(Book).filter(Book.is_public == True).all()
     
     for b in books:
@@ -523,7 +619,7 @@ def search_books(
 
         if match:
             owner = db.query(User).filter(User.id == b.owner_id).first()
-            has_struct = os.path.exists(b.file_path + ".struct.json") if b.file_path else False
+            has_struct = book_has_structure(b)
             comment_count = db.query(Comment).filter(Comment.book_id == b.id).count()
             result.append(BookOut(
                 id=b.id, title=b.title, filename=b.filename, sha256=b.sha256,
@@ -551,6 +647,7 @@ def list_authors(
     db: Session = Depends(get_db),
     user: Optional[User] = Depends(get_current_user),
 ):
+    one_week_ago = datetime.utcnow() - timedelta(days=7)
     authors = db.query(User).join(Book).filter(Book.is_public == True).distinct().all()
     result = []
     for a in authors:
@@ -565,6 +662,10 @@ def list_authors(
         if user:
             sub = db.query(Subscription).filter(Subscription.subscriber_id == user.id, Subscription.author_id == a.id).first()
             is_subscribed = bool(sub)
+        is_active = db.query(Book).filter(
+            Book.owner_id == a.id, Book.is_public == True,
+            Book.created_at >= one_week_ago
+        ).first() is not None
         result.append(AuthorOut(
             id=a.id,
             username=a.username,
@@ -575,7 +676,10 @@ def list_authors(
             total_comments=total_comments,
             total_likes=total_likes,
             avatar_url=a.avatar_url,
+            is_plus=a.is_plus,
+            is_active=is_active,
         ))
+    result.sort(key=lambda a: a.subscriber_count, reverse=True)
     return result
 
 
@@ -617,10 +721,11 @@ def get_book(
     book = db.query(Book).filter(Book.id == book_id).first()
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
-    if book.owner_id != (user.id if user else -1) and not book.is_public:
-        raise HTTPException(status_code=403, detail="Access denied")
     owner = db.query(User).filter(User.id == book.owner_id).first()
-    has_struct = os.path.exists(book.file_path + ".struct.json") if book.file_path else False
+    if book.owner_id != (user.id if user else -1) and not book.is_public:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=403, content={"detail": "Access denied", "owner_id": book.owner_id, "owner_username": owner.username if owner else "unknown"})
+    has_struct = book_has_structure(book)
     comment_count = db.query(Comment).filter(Comment.book_id == book.id).count()
     like_count = db.query(Like).filter(Like.book_id == book.id).count()
     is_liked = False
@@ -678,6 +783,18 @@ def get_book_text(
     return {"text": text, "title": book.title}
 
 
+def _enrich_characters(data: dict):
+    """Применить детекцию персонажей к структурированным данным."""
+    from fb2_to_vblite import find_speaker, determine_gender
+    for ch in data.get("chapters", []):
+        for p in ch.get("paragraphs", []):
+            text = p.get("text", "")
+            if text and p.get("character") is None:
+                char = find_speaker(text)
+                if char:
+                    p["character"] = {"name": char, "gender": determine_gender(char)}
+
+
 @router.get("/{book_id}/structured")
 def get_book_structured(
     book_id: int,
@@ -712,10 +829,25 @@ def get_book_structured(
                         images = get_book_images(file_path, book_id)
                         data["images"] = images
                     except: pass
+                    _enrich_characters(data)
                     return data
                 except Exception as e:
                     pass
-    
+            elif version.format == 'epub':
+                from vb_parser import parse_epub
+                try:
+                    data = parse_epub(file_path)
+                    try:
+                        from vb_parser import get_book_images, extract_epub_images
+                        cache_dir = os.path.join(os.path.dirname(file_path), ".images", str(book_id))
+                        images = extract_epub_images(file_path, cache_dir)
+                        data["images"] = images
+                    except: pass
+                    _enrich_characters(data)
+                    return data
+                except Exception as e:
+                    pass
+
     # Check text_content first - maybe it's JSON
     if text_content:
         try:
@@ -726,6 +858,7 @@ def get_book_structured(
                     images = get_book_images(file_path, book_id)
                     data["images"] = images
                 except: pass
+                _enrich_characters(data)
                 return data
         except: pass
     
@@ -740,12 +873,29 @@ def get_book_structured(
                 images = get_book_images(file_path, book_id)
                 data["images"] = images
             except: pass
+            _enrich_characters(data)
             return data
         except: pass
-    
+
+    # Fallback: try to parse epub/fb2 on-the-fly for existing books
+    ext = os.path.splitext(book.filename)[1].lower() if book.filename else ''
+    if ext == '.epub':
+        from vb_parser import parse_epub
+        try:
+            data = parse_epub(book.file_path)
+            if data.get("chapters"):
+                try:
+                    from vb_parser import get_book_images, extract_epub_images
+                    cache_dir = os.path.join(os.path.dirname(book.file_path), ".images", str(book_id))
+                    images = extract_epub_images(book.file_path, cache_dir)
+                    data["images"] = images
+                except: pass
+                _enrich_characters(data)
+                return data
+        except Exception as e:
+            pass
+
     raise HTTPException(status_code=404, detail="No structured content available")
-    
-    return data
 
 
 @router.put("/{book_id}/visibility")
@@ -770,7 +920,10 @@ def rename_book(
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    book = db.query(Book).filter(Book.id == book_id, Book.owner_id == user.id).first()
+    if user.role == "admin":
+        book = db.query(Book).filter(Book.id == book_id).first()
+    else:
+        book = db.query(Book).filter(Book.id == book_id, Book.owner_id == user.id).first()
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
     
@@ -895,6 +1048,8 @@ def convert_to_vblite(
     if not book:
         raise HTTPException(status_code=404, detail="Book not found or access denied")
 
+    from fb2_to_vblite import find_speaker, determine_gender
+
     struct_path = book.file_path + ".struct.json"
     if os.path.exists(struct_path):
         with open(struct_path, "r", encoding="utf-8") as f:
@@ -919,27 +1074,38 @@ def convert_to_vblite(
                 }],
             }
 
+    characters = {}
+    content_out = []
+    for ch in data.get("chapters", []):
+        paras_out = []
+        for p in ch.get("paragraphs", []):
+            text = p.get("text", "")
+            existing_char = p.get("character")
+            character_name = existing_char or find_speaker(text)
+            if character_name and character_name not in characters:
+                characters[character_name] = determine_gender(character_name)
+            paras_out.append({
+                "text": text,
+                "style": {
+                    "bold": p.get("bold", False),
+                    "italic": p.get("italic", False),
+                    **({"color": p["color"]} if p.get("color") else {}),
+                },
+                **({"ai": {"character": character_name}} if character_name else {}),
+            })
+        content_out.append({
+            "title": ch["title"],
+            "content": paras_out,
+        })
+
     vblite = {
         "format_version": "vblite-1.0",
         "title": data.get("title", book.title),
         "author": data.get("author", "Unknown"),
-        "content": [
-            {
-                "title": ch["title"],
-                "content": [
-                    {
-                        "text": p["text"],
-                        "style": {
-                            "bold": p.get("bold", False),
-                            "italic": p.get("italic", False),
-                            **({"color": p["color"]} if p.get("color") else {}),
-                        },
-                        **({"ai": {"character": p["character"]}} if p.get("character") else {}),
-                    }
-                    for p in ch.get("paragraphs", [])
-                ],
-            }
-            for ch in data.get("chapters", [])
+        "content": content_out,
+        "characters": [
+            {"name": name, "gender": gender}
+            for name, gender in characters.items()
         ],
     }
 
@@ -964,26 +1130,36 @@ def create_series(
     if existing:
         raise HTTPException(status_code=409, detail="Серия уже существует")
     
-    s = Series(name=name, owner_id=user.id)
+    description = payload.get("description", "").strip()
+    s = Series(name=name, owner_id=user.id, description=description if description else None)
     db.add(s)
     db.commit()
     db.refresh(s)
-    return {"id": s.id, "name": s.name}
+    return {"id": s.id, "name": s.name, "description": s.description}
 
 @router.get("/series/list")
 def list_series(
+    owner_id: Optional[int] = None,
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    # Admins see all series, regular users see only their own
-    if user.role == "admin":
-        series_list = db.query(Series).order_by(Series.name).all()
-    else:
-        series_list = db.query(Series).filter(Series.owner_id == user.id).order_by(Series.name).all()
+    query = db.query(Series)
+    if owner_id is not None:
+        query = query.filter(Series.owner_id == owner_id)
+    elif user.role != "admin":
+        query = query.filter(Series.owner_id == user.id)
+    series_list = query.order_by(Series.name).all()
     result = []
     for s in series_list:
-        book_count = len(s.books)
-        result.append({"id": s.id, "name": s.name, "book_count": book_count, "cover_image": s.cover_image})
+        owner = db.query(User).filter(User.id == s.owner_id).first()
+        result.append({
+            "id": s.id,
+            "name": s.name,
+            "book_count": len(s.books),
+            "cover_image": s.cover_image,
+            "owner_id": s.owner_id,
+            "owner_username": owner.username if owner else "Unknown",
+        })
     return result
 
 
@@ -1035,7 +1211,7 @@ def get_series(
         "name": s.name,
         "owner_id": s.owner_id,
         "cover_image": s.cover_image,
-        "common_genres": s.common_genres,
+        "description": s.description,
         "books": [{"id": b.id, "title": b.title, "cover_image": b.cover_image} for b in books],
     }
 
@@ -1055,19 +1231,11 @@ def update_series(
         s.name = payload["name"]
     if "cover_image" in payload:
         s.cover_image = payload["cover_image"]
-    if "common_genres" in payload:
-        s.common_genres = payload["common_genres"]
-        for book in s.books:
-            if book.genres:
-                existing = set(g.strip() for g in book.genres.split(","))
-                new = set(g.strip() for g in payload["common_genres"].split(","))
-                combined = ",".join(sorted(existing | new))
-                book.genres = combined
-            else:
-                book.genres = payload["common_genres"]
+    if "description" in payload:
+        s.description = payload["description"]
     
     db.commit()
-    return {"id": s.id, "name": s.name, "cover_image": s.cover_image, "common_genres": s.common_genres}
+    return {"id": s.id, "name": s.name, "cover_image": s.cover_image, "description": s.description}
 
 
 @router.post("/series/{series_id}/cover")
@@ -1170,21 +1338,24 @@ def assign_to_series(
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    book = db.query(Book).filter(Book.id == book_id, Book.owner_id == user.id).first()
+    if user.role == "admin":
+        book = db.query(Book).filter(Book.id == book_id).first()
+    else:
+        book = db.query(Book).filter(Book.id == book_id, Book.owner_id == user.id).first()
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
     
-    # Get series_ids array (allow both single ID and multiple)
     series_ids = payload.get("series_ids", [])
     if isinstance(series_ids, int):
         series_ids = [series_ids]
     
-    # Clear existing series
     book.series_list.clear()
     
-    # Add new series
     for series_id in series_ids:
-        s = db.query(Series).filter(Series.id == series_id, Series.owner_id == user.id).first()
+        if user.role == "admin":
+            s = db.query(Series).filter(Series.id == series_id).first()
+        else:
+            s = db.query(Series).filter(Series.id == series_id, Series.owner_id == user.id).first()
         if s:
             book.series_list.append(s)
     
@@ -1298,7 +1469,10 @@ async def upload_cover(
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    book = db.query(Book).filter(Book.id == book_id, Book.owner_id == user.id).first()
+    if user.role == "admin":
+        book = db.query(Book).filter(Book.id == book_id).first()
+    else:
+        book = db.query(Book).filter(Book.id == book_id, Book.owner_id == user.id).first()
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
     content = await file.read()
@@ -1401,7 +1575,10 @@ def update_metadata(
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    book = db.query(Book).filter(Book.id == book_id, Book.owner_id == user.id).first()
+    if user.role == "admin":
+        book = db.query(Book).filter(Book.id == book_id).first()
+    else:
+        book = db.query(Book).filter(Book.id == book_id, Book.owner_id == user.id).first()
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
     if payload.genres is not None:
@@ -1497,6 +1674,7 @@ def like_book(
         return {"liked": True}
     like = Like(user_id=user.id, book_id=book_id)
     db.add(like)
+    book.like_count = (book.like_count or 0) + 1
     db.commit()
     if book.owner_id != user.id:
         notif = Notification(
@@ -1520,11 +1698,69 @@ def unlike_book(
     if not like:
         return {"liked": False}
     db.delete(like)
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if book and book.like_count and book.like_count > 0:
+        book.like_count -= 1
     db.commit()
     return {"liked": False}
 
 
-# Subscriptions
+# Book subscriptions
+@router.post("/{book_id}/subscribe")
+def subscribe_to_book(
+    book_id: int,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    existing = db.query(BookSubscription).filter(BookSubscription.user_id == user.id, BookSubscription.book_id == book_id).first()
+    if existing:
+        return {"subscribed": True}
+    sub = BookSubscription(user_id=user.id, book_id=book_id)
+    db.add(sub)
+    book.subscription_count = (book.subscription_count or 0) + 1
+    db.commit()
+    if book.owner_id != user.id:
+        notif = Notification(
+            user_id=book.owner_id,
+            type="subscribe",
+            message=f"Пользователь {user.username} подписался на вашу книгу «{book.title}»",
+            link=f"/book/{book.id}"
+        )
+        db.add(notif)
+        db.commit()
+    return {"subscribed": True}
+
+
+@router.delete("/{book_id}/subscribe")
+def unsubscribe_from_book(
+    book_id: int,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    sub = db.query(BookSubscription).filter(BookSubscription.user_id == user.id, BookSubscription.book_id == book_id).first()
+    if not sub:
+        return {"subscribed": False}
+    db.delete(sub)
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if book and book.subscription_count and book.subscription_count > 0:
+        book.subscription_count -= 1
+    db.commit()
+    return {"subscribed": False}
+
+
+@router.get("/my-book-subscriptions")
+def my_book_subscriptions(
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    subs = db.query(BookSubscription).filter(BookSubscription.user_id == user.id).all()
+    return [{"book_id": s.book_id, "created_at": s.created_at.isoformat() if s.created_at else None} for s in subs]
+
+
+# Author subscriptions
 @router.post("/subscribe/{author_id}")
 def subscribe_to_author(
     author_id: int,
@@ -1679,8 +1915,12 @@ def get_avatar(
 def admin_list_users(
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
+    search: Optional[str] = Query(None),
 ):
     users = db.query(User).order_by(User.id).all()
+    if search:
+        search_lower = search.lower()
+        users = [u for u in users if search_lower in u.username.lower()]
     result = []
     for u in users:
         book_count = db.query(Book).filter(Book.owner_id == u.id).count()
@@ -1707,11 +1947,12 @@ def admin_list_books(
     limit: int = Query(50, ge=1, le=100),
     search: Optional[str] = Query(None),
 ):
-    query = db.query(Book)
+    books = db.query(Book).order_by(Book.id.desc()).all()
     if search:
-        query = query.filter(Book.title.ilike(f"%{search}%"))
-    total = query.count()
-    books = query.order_by(Book.id.desc()).offset((page - 1) * limit).limit(limit).all()
+        search_lower = search.lower()
+        books = [b for b in books if search_lower in b.title.lower()]
+    total = len(books)
+    books = books[(page - 1) * limit: page * limit]
     result = []
     for b in books:
         owner = db.query(User).filter(User.id == b.owner_id).first()
@@ -1736,8 +1977,12 @@ def admin_list_books(
 def admin_list_series(
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
+    search: Optional[str] = Query(None),
 ):
     series_list = db.query(Series).order_by(Series.id.desc()).all()
+    if search:
+        search_lower = search.lower()
+        series_list = [s for s in series_list if search_lower in s.name.lower()]
     result = []
     for s in series_list:
         owner = db.query(User).filter(User.id == s.owner_id).first()
@@ -1799,6 +2044,57 @@ def admin_delete_series(
     db.delete(series)
     db.commit()
     return {"detail": "Series deleted"}
+
+
+@router.put("/admin/user/{user_id}")
+def admin_update_user(
+    user_id: int,
+    payload: dict,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    target_user = db.query(User).filter(User.id == user_id).first()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    new_username = payload.get("username", "").strip()
+    new_password = payload.get("password", "").strip()
+    if new_username:
+        if len(new_username) < 2:
+            raise HTTPException(status_code=400, detail="Имя пользователя должно быть не менее 2 символов")
+        if len(new_username) > 24:
+            raise HTTPException(status_code=400, detail="Имя пользователя должно быть не более 24 символов")
+        if new_username != target_user.username and db.query(User).filter(User.username == new_username).first():
+            raise HTTPException(status_code=400, detail="Имя пользователя уже занято")
+        target_user.username = new_username
+    if new_password:
+        if len(new_password) < 3:
+            raise HTTPException(status_code=400, detail="Пароль должен быть не менее 3 символов")
+        target_user.hashed_password = hash_password(new_password)
+    db.commit()
+    return {"id": target_user.id, "username": target_user.username, "role": target_user.role, "is_plus": target_user.is_plus, "is_banned": target_user.is_banned}
+
+
+@router.post("/admin/user")
+def admin_create_user(
+    payload: dict,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    username = payload.get("username", "").strip()
+    password = payload.get("password", "").strip()
+    if len(username) < 2:
+        raise HTTPException(status_code=400, detail="Имя пользователя должно быть не менее 2 символов")
+    if len(username) > 24:
+        raise HTTPException(status_code=400, detail="Имя пользователя должно быть не более 24 символов")
+    if len(password) < 3:
+        raise HTTPException(status_code=400, detail="Пароль должен быть не менее 3 символов")
+    if db.query(User).filter(User.username == username).first():
+        raise HTTPException(status_code=400, detail="Имя пользователя уже занято")
+    user = User(username=username, hashed_password=hash_password(password), role="user")
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return {"id": user.id, "username": user.username, "role": user.role, "is_plus": user.is_plus, "is_banned": user.is_banned}
 
 
 @router.put("/admin/user/{user_id}/ban")

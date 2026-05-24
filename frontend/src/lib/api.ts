@@ -59,8 +59,16 @@ async function request(path: string, options: RequestInit = {}) {
   if (!(options.body instanceof FormData)) {
     headers["Content-Type"] = headers["Content-Type"] || "application/json";
   }
-  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  } catch {
+    throw new Error("Сервер временно недоступен. Попробуйте обновить страницу позже. Если проблема сохраняется — обратитесь в техническую поддержку.");
+  }
   if (!res.ok) {
+    if (res.status >= 500) {
+      throw new Error("Сервер временно недоступен. Попробуйте обновить страницу позже. Если проблема сохраняется — обратитесь в техническую поддержку.");
+    }
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail || err.error || "Request failed");
   }
@@ -119,6 +127,22 @@ export async function apiGetMe() {
   return res.json();
 }
 
+export async function apiUpdateProfile(currentPassword: string, username?: string, newPassword?: string) {
+  const res = await request("/api/auth/profile", {
+    method: "PUT",
+    body: JSON.stringify({
+      current_password: currentPassword,
+      ...(username ? { username } : {}),
+      ...(newPassword ? { new_password: newPassword } : {}),
+    }),
+  });
+  const data = await res.json();
+  if (data.access_token) {
+    setToken(data.access_token);
+  }
+  return data;
+}
+
 export async function apiUploadBook(file: File, seriesName?: string, title?: string, genres?: string, description?: string) {
   const form = new FormData();
   form.append("file", file);
@@ -160,8 +184,18 @@ export async function apiSearchBooks(query: string) {
 }
 
 export async function apiGetBook(id: number) {
-  const res = await request(`/api/books/${id}`);
-  return res.json();
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(`${API_BASE}/api/books/${id}`, { headers });
+  const data = await res.json();
+  if (!res.ok) {
+    if (res.status === 403 && data.owner_id != null) {
+      return data;
+    }
+    throw new Error(data.detail || data.error || "Request failed");
+  }
+  return data;
 }
 
 export async function apiGetBookText(id: number) {
@@ -246,6 +280,16 @@ export async function apiUpdateChapter(bookId: number, chapterIndex: number, dat
   return res.json();
 }
 
+export async function apiConvertFb2ToVblite(file: File) {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await request("/api/convert", {
+    method: "POST",
+    body: form,
+  });
+  return res.json();
+}
+
 export async function apiDownloadVblite(bookId: number) {
   const res = await request(`/api/books/${bookId}/convert/vblite`);
   const data = await res.json();
@@ -258,16 +302,18 @@ export async function apiDownloadVblite(bookId: number) {
   URL.revokeObjectURL(url);
 }
 
-export async function apiCreateSeries(name: string) {
+export async function apiCreateSeries(name: string, description?: string) {
   const res = await request("/api/books/series", {
     method: "POST",
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, description }),
   });
   return res.json();
 }
 
-export async function apiListSeries() {
-  const res = await request("/api/books/series/list");
+export async function apiListSeries(ownerId?: number) {
+  let url = "/api/books/series/list";
+  if (ownerId !== undefined) url += `?owner_id=${ownerId}`;
+  const res = await request(url);
   return res.json();
 }
 
@@ -390,6 +436,32 @@ export async function apiMySubscriptions() {
   return res.json();
 }
 
+export async function apiSubscribeBook(bookId: number) {
+  const res = await request(`/api/books/${bookId}/subscribe`, { method: "POST" });
+  return res.json();
+}
+
+export async function apiUnsubscribeBook(bookId: number) {
+  const res = await request(`/api/books/${bookId}/subscribe`, { method: "DELETE" });
+  return res.json();
+}
+
+export async function apiMyBookSubscriptions() {
+  const res = await request("/api/books/my-book-subscriptions");
+  return res.json();
+}
+
+export async function apiTopBooks() {
+  const res = await request("/api/books/public/top");
+  return res.json();
+}
+
+export async function apiUnifiedSearch(q: string, limit: number = 10) {
+  const res = await request(`/api/books/unified-search?q=${encodeURIComponent(q)}&limit=${limit}`);
+  const data = await res.json();
+  return data.results || [];
+}
+
 export async function apiNotifications() {
   const res = await request("/api/books/notifications");
   return res.json();
@@ -434,14 +506,39 @@ export function apiGetAvatarUrl(userId: number): string {
   return `/api/books/user/avatar/${userId}`;
 }
 
-export async function apiPublicBooksPaginated(page: number = 1, limit: number = 20, search?: string, sortBy?: string, genre?: string, extension?: string) {
+export async function apiPublicBooksPaginated(page: number = 1, limit: number = 20, search?: string, sortBy?: string, genre?: string, extension?: string, genreFilter?: { mode: string; whitelist: string[]; blacklist: string[] }) {
   let url = `/api/books/public?page=${page}&limit=${limit}`;
   if (search) url += `&search=${encodeURIComponent(search)}`;
   if (sortBy) url += `&sort_by=${sortBy}`;
   if (genre) url += `&genre=${encodeURIComponent(genre)}`;
   if (extension) url += `&extension=${encodeURIComponent(extension)}`;
   const res = await request(url);
-  return res.json();
+  let data = await res.json();
+  if (genreFilter && genreFilter.mode !== "off") {
+    const whitelist = genreFilter.whitelist.map(g => g.toLowerCase());
+    const blacklist = genreFilter.blacklist.map(g => g.toLowerCase());
+    const hasGenre = (bookGenres: string | null, list: string[]) =>
+      list.length === 0 || (bookGenres && list.some(g => bookGenres.toLowerCase().includes(g)));
+    if (genreFilter.mode === "strict") {
+      data = data.filter((b: any) =>
+        (!whitelist.length || hasGenre(b.genres, whitelist)) &&
+        !hasGenre(b.genres, blacklist)
+      );
+    } else if (genreFilter.mode === "soft") {
+      data = data.sort((a: any, b: any) => {
+        const aHasWhitelist = hasGenre(a.genres, whitelist);
+        const bHasWhitelist = hasGenre(b.genres, whitelist);
+        const aHasBlacklist = hasGenre(a.genres, blacklist);
+        const bHasBlacklist = hasGenre(b.genres, blacklist);
+        if (aHasWhitelist && !bHasWhitelist) return -1;
+        if (!aHasWhitelist && bHasWhitelist) return 1;
+        if (aHasBlacklist && !bHasBlacklist) return 1;
+        if (!aHasBlacklist && bHasBlacklist) return -1;
+        return 0;
+      });
+    }
+  }
+  return data;
 }
 
 export async function apiHotBooks() {
@@ -459,7 +556,7 @@ export async function apiGetSeries(seriesId: number) {
   return res.json();
 }
 
-export async function apiUpdateSeries(seriesId: number, data: { name?: string; cover_image?: string; common_genres?: string }) {
+export async function apiUpdateSeries(seriesId: number, data: { name?: string; cover_image?: string; description?: string }) {
   const res = await request(`/api/books/series/${seriesId}`, {
     method: "PUT",
     body: JSON.stringify(data),
@@ -485,8 +582,10 @@ export async function apiUploadSeriesCover(seriesId: number, file: File) {
   return res.json();
 }
 
-export async function apiAdminUsers() {
-  const res = await request("/api/books/admin/users");
+export async function apiAdminUsers(search?: string) {
+  let url = "/api/books/admin/users";
+  if (search) url += `?search=${encodeURIComponent(search)}`;
+  const res = await request(url);
   return res.json();
 }
 
@@ -497,8 +596,10 @@ export async function apiAdminBooks(page: number = 1, limit: number = 50, search
   return res.json();
 }
 
-export async function apiAdminSeries() {
-  const res = await request("/api/books/admin/series");
+export async function apiAdminSeries(search?: string) {
+  let url = "/api/books/admin/series";
+  if (search) url += `?search=${encodeURIComponent(search)}`;
+  const res = await request(url);
   return res.json();
 }
 
@@ -522,6 +623,22 @@ export async function apiAdminBanUser(userId: number, isPlus: boolean, role: str
 
 export async function apiAdminDeleteUser(userId: number) {
   const res = await request(`/api/books/admin/user/${userId}`, { method: "DELETE" });
+  return res.json();
+}
+
+export async function apiAdminUpdateUser(userId: number, data: { username?: string; password?: string }) {
+  const res = await request(`/api/books/admin/user/${userId}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export async function apiAdminCreateUser(username: string, password: string) {
+  const res = await request("/api/books/admin/user", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
   return res.json();
 }
 

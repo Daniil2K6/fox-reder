@@ -10,7 +10,7 @@ _project_root = str(Path(__file__).resolve().parent.parent)
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 
@@ -18,7 +18,8 @@ from database import init_db, SessionLocal, User
 from auth import router as auth_router, require_user, get_current_user, hash_password
 from books import router as books_router
 from tts import get_tts_service, TTSService
-from config import TTS_MAX_LENGTH, TTS_CHUNK_SIZE
+from config import TTS_MAX_LENGTH, TTS_CHUNK_SIZE, MAX_FILE_SIZE
+from fb2_to_vblite import convert_fb2_to_vblite
 
 logging.basicConfig(
     level=logging.INFO,
@@ -99,6 +100,33 @@ app.include_router(books_router)
 @app.get("/api/health")
 def health():
     return {"status": "ok", "app": "Fox Reader"}
+
+
+@app.post("/api/convert")
+async def convert_fb2(
+    file: UploadFile = File(...),
+    user=Depends(get_current_user),
+):
+    if not file.filename or not file.filename.lower().endswith(('.fb2', '.epub')):
+        raise HTTPException(status_code=400, detail="Поддерживаются только FB2 и EPUB файлы")
+
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="Файл слишком большой")
+
+    tmp_path = os.path.join("/tmp", file.filename)
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(content)
+
+        result = convert_fb2_to_vblite(tmp_path)
+        return result
+    except Exception as e:
+        logger.error(f"Conversion error: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка конвертации: {str(e)}")
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 @app.post("/api/tts")
