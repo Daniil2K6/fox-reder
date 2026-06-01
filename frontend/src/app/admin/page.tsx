@@ -11,12 +11,13 @@ import {
   apiAdminUpdateUser, apiAdminCreateUser,
   apiRenameBook, apiUpdateMetadata, apiUpdateSeries,
   apiGetCoverUrl, apiGetSeriesCoverUrl, apiGetAvatarUrl,
+  apiAdminSupportTickets, apiSupportTicket, apiReplySupportTicket, apiAdminUpdateTicketStatus,
 } from "@/lib/api";
 import { GenreSelector } from "@/components/GenreSelector";
 import { BookEditModal } from "@/components/BookEditModal";
 import { Navbar } from "@/components/Navbar";
 
-type Tab = "users" | "books" | "series";
+type Tab = "users" | "books" | "series" | "support";
 
 export default function AdminPage() {
   const router = useRouter();
@@ -34,6 +35,11 @@ export default function AdminPage() {
   const [userSearch, setUserSearch] = useState("");
   const [seriesSearch, setSeriesSearch] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<{type: string; id: number; name: string} | null>(null);
+  const [supportTickets, setSupportTickets] = useState<any[]>([]);
+  const [selectedSupportTicket, setSelectedSupportTicket] = useState<any>(null);
+  const [supportReply, setSupportReply] = useState("");
+  const [supportSearch, setSupportSearch] = useState("");
+  const [supportTab, setSupportTab] = useState<"open" | "closed">("open");
   const [editBookData, setEditBookData] = useState<any>(null);
   const [editSeriesId, setEditSeriesId] = useState<number | null>(null);
   const [editSeriesName, setEditSeriesName] = useState("");
@@ -68,6 +74,8 @@ export default function AdminPage() {
         setBookTotalPages(data.pages);
       } else if (activeTab === "series") {
         setSeries(await apiAdminSeries(seriesSearch || undefined));
+      } else if (activeTab === "support") {
+        setSupportTickets(await apiAdminSupportTickets());
       }
     } catch (err: any) {
       setError(err.message);
@@ -210,7 +218,7 @@ export default function AdminPage() {
         )}
 
         <div style={{ display: "flex", gap: 4, marginBottom: 24, borderBottom: "1px solid var(--border)", paddingBottom: 4 }}>
-          {(["users", "books", "series"] as Tab[]).map((tab) => (
+          {(["users", "books", "series", "support"] as Tab[]).map((tab) => (
             <button key={tab} onClick={() => setActiveTab(tab)} style={{
               padding: "12px 24px", border: "none", borderRadius: "8px 8px 0 0",
               background: activeTab === tab ? "var(--accent)" : "transparent",
@@ -220,6 +228,7 @@ export default function AdminPage() {
               {tab === "users" && "👥 Пользователи"}
               {tab === "books" && "📚 Книги"}
               {tab === "series" && "📖 Серии"}
+              {tab === "support" && "💬 Поддержка"}
             </button>
           ))}
         </div>
@@ -428,6 +437,118 @@ export default function AdminPage() {
               <button onClick={handleCreateUser} style={{ padding: "8px 16px", borderRadius: 6, border: "none", background: "var(--accent)", color: "#fff", cursor: "pointer" }}>Создать</button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* SUPPORT TAB */}
+      {activeTab === "support" && (
+        <div>
+          {selectedSupportTicket ? (
+            <div>
+              <button onClick={() => { setSelectedSupportTicket(null); setSupportReply(""); }} style={{ background: "none", border: "none", color: "var(--accent)", cursor: "pointer", fontSize: 13, marginBottom: 12 }}>← Назад к списку</button>
+              <h3 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", marginBottom: 4 }}>{selectedSupportTicket.subject}</h3>
+              <span style={{ fontSize: 11, color: selectedSupportTicket.status === "open" ? "var(--accent)" : "var(--text-muted)" }}>
+                {selectedSupportTicket.status === "open" ? "Открыт" : "Закрыт"}
+              </span>
+              <div style={{ marginTop: 14, maxHeight: 400, overflowY: "auto" }}>
+                {(selectedSupportTicket.replies || []).map((r: any) => (
+                  <div key={r.id} style={{ marginBottom: 12, padding: "12px 14px", borderRadius: 10, background: r.is_admin ? "rgba(249,115,22,0.06)" : "var(--bg-primary)", border: "1px solid var(--border)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: r.is_admin ? "var(--accent)" : "var(--text-primary)" }}>{r.is_admin ? "🛡 Админ" : r.username}</span>
+                      <span style={{ fontSize: 10, color: "var(--text-muted)" }}>{new Date(r.created_at).toLocaleString("ru-RU")}</span>
+                    </div>
+                    <p style={{ fontSize: 13, margin: 0, whiteSpace: "pre-wrap", color: "var(--text-primary)" }}>{r.content}</p>
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+                <input
+                  type="text"
+                  value={supportReply}
+                  onChange={(e) => setSupportReply(e.target.value)}
+                  onKeyDown={async (e) => {
+                    if (e.key === "Enter" && supportReply.trim()) {
+                      await apiReplySupportTicket(selectedSupportTicket.id, supportReply);
+                      setSupportReply("");
+                      const updated = await apiSupportTicket(selectedSupportTicket.id);
+                      setSelectedSupportTicket(updated);
+                    }
+                  }}
+                  placeholder="Ответ пользователю..."
+                  style={{ flex: 1, padding: "8px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-primary)", fontSize: 13, color: "var(--text-primary)", outline: "none" }}
+                />
+                <button
+                  onClick={async () => {
+                    if (!supportReply.trim()) return;
+                    await apiReplySupportTicket(selectedSupportTicket.id, supportReply);
+                    setSupportReply("");
+                    const updated = await apiSupportTicket(selectedSupportTicket.id);
+                    setSelectedSupportTicket(updated);
+                  }}
+                  style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 500, cursor: "pointer" }}
+                >Отправить</button>
+                <button
+                  onClick={async () => {
+                    await apiAdminUpdateTicketStatus(selectedSupportTicket.id, selectedSupportTicket.status === "closed" ? "open" : "closed");
+                    const updated = await apiSupportTicket(selectedSupportTicket.id);
+                    setSelectedSupportTicket(updated);
+                  }}
+                  style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-tertiary)", color: "var(--text-secondary)", fontSize: 12, cursor: "pointer" }}
+                >{selectedSupportTicket.status === "closed" ? "Переоткрыть" : "Закрыть"}</button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div style={{ display: "flex", gap: 4, marginBottom: 12, borderBottom: "1px solid var(--border)", paddingBottom: 4 }}>
+                <button onClick={() => setSupportTab("open")} style={{ padding: "8px 16px", border: "none", borderRadius: "8px 8px 0 0", background: supportTab === "open" ? "var(--accent)" : "transparent", color: supportTab === "open" ? "#fff" : "var(--text-secondary)", fontSize: 13, fontWeight: 500, cursor: "pointer" }}>
+                  Открытые ({supportTickets.filter(t => t.status === "open").length})
+                </button>
+                <button onClick={() => setSupportTab("closed")} style={{ padding: "8px 16px", border: "none", borderRadius: "8px 8px 0 0", background: supportTab === "closed" ? "var(--accent)" : "transparent", color: supportTab === "closed" ? "#fff" : "var(--text-secondary)", fontSize: 13, fontWeight: 500, cursor: "pointer" }}>
+                  Закрытые ({supportTickets.filter(t => t.status === "closed").length})
+                </button>
+              </div>
+              <input
+                type="text"
+                value={supportSearch}
+                onChange={(e) => setSupportSearch(e.target.value)}
+                placeholder="Поиск по обращениям..."
+                style={{ width: "100%", padding: "10px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: 14, outline: "none", marginBottom: 16 }}
+              />
+              {supportTickets.filter(t => t.status === supportTab).length === 0 ? (
+                <div style={{ textAlign: "center", padding: "40px 0", color: "var(--text-muted)" }}>
+                  {supportTab === "open" ? "Нет открытых обращений" : "Нет закрытых обращений"}
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {supportTickets.filter(t => t.status === supportTab && (!supportSearch || t.subject.toLowerCase().includes(supportSearch.toLowerCase()) || t.username.toLowerCase().includes(supportSearch.toLowerCase()) || (t.content && t.content.toLowerCase().includes(supportSearch.toLowerCase())))).map((t) => (
+                    <div
+                      key={t.id}
+                      onClick={async () => {
+                        const ticket = await apiSupportTicket(t.id);
+                        setSelectedSupportTicket(ticket);
+                      }}
+                      style={{ padding: "14px 18px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--bg-secondary)", cursor: "pointer", transition: "transform 0.15s" }}
+                      onMouseEnter={(e) => { e.currentTarget.style.transform = "translateX(4px)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.transform = "translateX(0)"; }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <h4 style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)", margin: 0 }}>{t.subject}</h4>
+                          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>от {t.username}</span>
+                          {t.content && (
+                            <p style={{ fontSize: 12, color: "var(--text-secondary)", margin: "4px 0 0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.content}</p>
+                          )}
+                        </div>
+                        <div style={{ textAlign: "right" }}>
+                          <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 2 }}>{t.reply_count} ответов</div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
 

@@ -7,14 +7,15 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from sqlalchemy import func, UniqueConstraint
+from sqlalchemy import func, UniqueConstraint, or_
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-from database import Series, Book, BookVersion, User, Comment, Like, Subscription, BookSubscription, Notification, get_db
+from database import Series, Book, BookVersion, User, Comment, Like, Subscription, BookSubscription, Notification, get_db, SupportMessage, SupportReply
 from auth import require_user, get_current_user, require_admin, hash_password
 from vb_parser import parse_vb, parse_fb2, parse_epub, extract_plain_text, extract_cover_from_file
 from config import MAX_FILE_SIZE, MAX_FILE_SIZE_MB
+from search import transliterate
 
 LIBRALI_DIR = os.path.join(os.path.dirname(__file__), "librali")
 os.makedirs(os.path.join(LIBRALI_DIR, "books"), exist_ok=True)
@@ -352,6 +353,7 @@ async def upload_book(
             if v.format not in formats:
                 formats.append(v.format)
 
+
     return BookOut(
         id=book.id,
         title=book.title,
@@ -403,46 +405,113 @@ def public_books(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     search: Optional[str] = Query(None),
-    sort_by: Optional[str] = Query("created_at", description="created_at, likes, views"),
+    match_mode: Optional[str] = Query("soft", description="strict or soft"),
+    search_fields: Optional[str] = Query("all", description="title, description, or all"),
+    sort_by: Optional[str] = Query("created_at", description="relevance, created_at, likes, views"),
     genre: Optional[str] = Query(None),
     extension: Optional[str] = Query(None),
     min_pages: Optional[int] = Query(None),
+    whitelist: Optional[str] = Query(None, description="comma-separated genres (must match)"),
+    blacklist: Optional[str] = Query(None, description="comma-separated genres (must NOT match)"),
+    name_whitelist: Optional[str] = Query(None, description="comma-separated title terms (all must match)"),
+    name_blacklist: Optional[str] = Query(None, description="comma-separated title terms (none must match)"),
 ):
-    query = db.query(Book).filter(Book.is_public == True)
-    
-    if search:
-        search_lower = search.lower()
-        query = query.filter(
-            (Book.title.ilike(f"%{search_lower}%")) |
-            (Book.description.ilike(f"%{search_lower}%")) |
-            (Book.genres.ilike(f"%{search_lower}%"))
-        )
-    
+    # SQLite lower() doesn't handle Cyrillic, so we load all and filter in Python
+    all_books = db.query(Book).filter(Book.is_public == True).all()
+
     if genre:
-        query = query.filter(Book.genres.ilike(f"%{genre}%"))
-    
+        genre_lower = genre.lower()
+        all_books = [b for b in all_books if b.genres and genre_lower in b.genres.lower()]
+
     if extension:
         ext = f".{extension.lower().strip('.')}"
-        query = query.filter(Book.filename.ilike(f"%{ext}"))
-    
-    total = query.count()
-    
+        all_books = [b for b in all_books if ext in (b.filename or '').lower()]
+
+    if search:
+        search_lower = search.lower().strip()
+        # Generate case variants: lowercase, capitalize, upper
+        words = search_lower.split()
+        search_variants = set()
+        for w in words:
+            search_variants.add(w)
+            search_variants.add(w.upper())
+            search_variants.add(w.capitalize())
+        # Add transliterations
+        tr = transliterate(search_lower)
+        if tr:
+            search_variants.add(tr.lower())
+            search_variants.add(tr.upper())
+            search_variants.add(tr.capitalize())
+
+        def book_matches(b: Book) -> bool:
+            fields = []
+            if search_fields in ("title", "all"):
+                fields.append(b.title or "")
+            if search_fields in ("description", "all"):
+                fields.append(b.description or "")
+            if search_fields == "all":
+                fields.append(b.genres or "")
+            for field in fields:
+                field_lower = field.lower()
+                for v in search_variants:
+                    if v.lower() in field_lower:
+                        return True
+            return False
+
+        all_books = [b for b in all_books if book_matches(b)]
+
+    if whitelist:
+        whitelist_genres = [g.strip().lower() for g in whitelist.split(",") if g.strip()]
+        if whitelist_genres:
+            def has_whitelist(b: Book) -> bool:
+                g = (b.genres or "").lower()
+                return any(wg in g for wg in whitelist_genres)
+            all_books = [b for b in all_books if has_whitelist(b)]
+
+    if blacklist:
+        blacklist_genres = [g.strip().lower() for g in blacklist.split(",") if g.strip()]
+        def not_blacklisted(b: Book) -> bool:
+            g = (b.genres or "").lower()
+            return not any(bg in g for bg in blacklist_genres)
+        all_books = [b for b in all_books if not_blacklisted(b)]
+
+    if name_whitelist:
+        nw_terms = [t.strip().lower() for t in name_whitelist.split(",") if t.strip()]
+        if nw_terms:
+            all_books = [b for b in all_books if all(t in (b.title or "").lower() for t in nw_terms)]
+
+    if name_blacklist:
+        nb_terms = [t.strip().lower() for t in name_blacklist.split(",") if t.strip()]
+        if nb_terms:
+            all_books = [b for b in all_books if not any(t in (b.title or "").lower() for t in nb_terms)]
+
+    total = len(all_books)
+
+    if search and sort_by == "created_at":
+        sort_by = "relevance"
+
     if sort_by == "likes":
-        # Need to join with Like to sort - get book IDs with like counts
-        books_with_likes = db.query(
-            Book.id,
-            func.count(Like.id).label("like_count")
-        ).outerjoin(Like, Book.id == Like.book_id).filter(Book.is_public == True).group_by(Book.id).order_by(func.count(Like.id).desc()).all()
-        book_ids_ordered = [b.id for b in books_with_likes]
-        # Manual sort
-        books = query.all()
-        books.sort(key=lambda b: book_ids_ordered.index(b.id) if b.id in book_ids_ordered else 9999)
+        all_books.sort(key=lambda b: -(b.like_count or 0))
     elif sort_by == "views":
-        query = query.order_by(Book.view_count.desc())
-        books = query.offset((page - 1) * limit).limit(limit).all()
-    else:  # created_at
-        query = query.order_by(Book.created_at.desc())
-        books = query.offset((page - 1) * limit).limit(limit).all()
+        all_books.sort(key=lambda b: -(b.view_count or 0))
+    elif sort_by == "relevance" and search:
+        search_lower = search.lower().strip()
+        def relevance_score(b: Book) -> tuple:
+            title = (b.title or "").lower()
+            if title == search_lower:
+                return (0, 0)
+            if title.startswith(search_lower):
+                return (1, 0)
+            if search_lower in title:
+                return (2, 0)
+            return (3, 0)
+        all_books.sort(key=relevance_score)
+    else:
+        all_books.sort(key=lambda b: b.created_at or datetime.min, reverse=True)
+
+    # Paginate
+    start = (page - 1) * limit
+    books = all_books[start:start + limit]
     
     result = []
     for b in books:
@@ -478,31 +547,85 @@ formats=[b.filename.split('.')[-1].lower()] + [v.format for v in b.versions],
 def public_books_count(
     db: Session = Depends(get_db),
     search: Optional[str] = Query(None),
+    whitelist: Optional[str] = Query(None),
+    blacklist: Optional[str] = Query(None),
+    name_whitelist: Optional[str] = Query(None),
+    name_blacklist: Optional[str] = Query(None),
 ):
-    query = db.query(Book).filter(Book.is_public == True)
-    
+    all_books = db.query(Book).filter(Book.is_public == True).all()
+
     if search:
-        search_lower = search.lower()
-        query = query.filter(
-            (Book.title.ilike(f"%{search_lower}%")) |
-            (Book.description.ilike(f"%{search_lower}%")) |
-            (Book.genres.ilike(f"%{search_lower}%"))
-        )
-    
-    return {"total": query.count()}
+        search_lower = search.lower().strip()
+        words = search_lower.split()
+        search_variants = set()
+        for w in words:
+            search_variants.add(w)
+            search_variants.add(w.upper())
+            search_variants.add(w.capitalize())
+        tr = transliterate(search_lower)
+        if tr:
+            search_variants.add(tr.lower())
+            search_variants.add(tr.upper())
+            search_variants.add(tr.capitalize())
+
+        def book_matches(b: Book) -> bool:
+            fields = [(b.title or ""), (b.description or ""), (b.genres or "")]
+            for field in fields:
+                field_lower = field.lower()
+                for v in search_variants:
+                    if v.lower() in field_lower:
+                        return True
+            return False
+
+        all_books = [b for b in all_books if book_matches(b)]
+
+    if whitelist:
+        whitelist_genres = [g.strip().lower() for g in whitelist.split(",") if g.strip()]
+        if whitelist_genres:
+            all_books = [b for b in all_books if any(wg in (b.genres or "").lower() for wg in whitelist_genres)]
+
+    if blacklist:
+        blacklist_genres = [g.strip().lower() for g in blacklist.split(",") if g.strip()]
+        all_books = [b for b in all_books if not any(bg in (b.genres or "").lower() for bg in blacklist_genres)]
+
+    if name_whitelist:
+        nw_terms = [t.strip().lower() for t in name_whitelist.split(",") if t.strip()]
+        if nw_terms:
+            all_books = [b for b in all_books if all(t in (b.title or "").lower() for t in nw_terms)]
+
+    if name_blacklist:
+        nb_terms = [t.strip().lower() for t in name_blacklist.split(",") if t.strip()]
+        if nb_terms:
+            all_books = [b for b in all_books if not any(t in (b.title or "").lower() for t in nb_terms)]
+
+    return {"total": len(all_books)}
 
 
 @router.get("/public/hot")
 def hot_books(
     db: Session = Depends(get_db),
     user: Optional[User] = Depends(get_current_user),
+    whitelist: Optional[str] = Query(None),
+    blacklist: Optional[str] = Query(None),
 ):
-    """5 newest public books from Plus users."""
+    """5 newest public books from Plus users, filtered by genre."""
     plus_user_ids = db.query(User.id).filter(User.is_plus == True).subquery()
-    books = db.query(Book).filter(
+    query = db.query(Book).filter(
         Book.is_public == True,
         Book.owner_id.in_(plus_user_ids)
-    ).order_by(Book.created_at.desc()).limit(5).all()
+    )
+
+    if whitelist:
+        wl = [g.strip().lower() for g in whitelist.split(",") if g.strip()]
+        if wl:
+            query = query.filter(or_(*[Book.genres.ilike(f"%{g}%") for g in wl]))
+
+    if blacklist:
+        bl = [g.strip().lower() for g in blacklist.split(",") if g.strip()]
+        for g in bl:
+            query = query.filter(~Book.genres.ilike(f"%{g}%"))
+
+    books = query.order_by(Book.created_at.desc()).limit(5).all()
     return [{"id": b.id, "title": b.title, "cover_image": b.cover_image, "owner_id": b.owner_id, "owner_username": b.owner.username if b.owner else "", "formats": [b.filename.split('.')[-1].lower()] + [v.format for v in b.versions]} for b in books]
 
 
@@ -572,16 +695,16 @@ def unified_search(
             "book_count": book_count, "cover_image": s.cover_image,
         })
 
-    # Books — search only, no popularity bias
+    # Books — ILIKE search
     books = db.query(Book).filter(
         Book.is_public == True,
         (Book.title.ilike(f"%{search_lower}%")) |
         (Book.description.ilike(f"%{search_lower}%")) |
         (Book.genres.ilike(f"%{search_lower}%"))
     ).limit(limit).all()
-    # exact title match first, then by id desc
     books.sort(key=lambda b: (0 if b.title.lower() == search_lower else 1, -b.id))
-    for b in books:
+
+    for b in books[:limit]:
         owner = db.query(User).filter(User.id == b.owner_id).first()
         results.append({
             "type": "book", "id": b.id, "title": b.title,
@@ -646,11 +769,30 @@ def search_books(
 def list_authors(
     db: Session = Depends(get_db),
     user: Optional[User] = Depends(get_current_user),
+    whitelist: Optional[str] = Query(None),
+    blacklist: Optional[str] = Query(None),
 ):
     one_week_ago = datetime.utcnow() - timedelta(days=7)
+
+    # If genre filters active, find allowed owner_ids first
+    allowed_owner_ids = None
+    if whitelist or blacklist:
+        book_q = db.query(Book.owner_id).filter(Book.is_public == True).distinct()
+        if whitelist:
+            wl = [g.strip().lower() for g in whitelist.split(",") if g.strip()]
+            if wl:
+                book_q = book_q.filter(or_(*[Book.genres.ilike(f"%{g}%") for g in wl]))
+        if blacklist:
+            bl = [g.strip().lower() for g in blacklist.split(",") if g.strip()]
+            for g in bl:
+                book_q = book_q.filter(~Book.genres.ilike(f"%{g}%"))
+        allowed_owner_ids = {row[0] for row in book_q.all()}
+
     authors = db.query(User).join(Book).filter(Book.is_public == True).distinct().all()
     result = []
     for a in authors:
+        if allowed_owner_ids is not None and a.id not in allowed_owner_ids:
+            continue
         books = db.query(Book).filter(Book.owner_id == a.id, Book.is_public == True).all()
         book_ids = [b.id for b in books]
         book_count = len(books)
@@ -710,6 +852,124 @@ def get_author(
         "books": [{"id": b.id, "title": b.title, "cover_image": b.cover_image, "genres": b.genres, "view_count": b.view_count, "like_count": db.query(Like).filter(Like.book_id == b.id).count()} for b in books],
         "series": [{"id": s.id, "name": s.name, "cover_image": s.cover_image, "book_count": len(s.books)} for s in series_list],
     }
+
+
+
+
+# ==================== SUPPORT TICKETS ====================
+
+@router.post("/support")
+def create_support_ticket(
+    payload: dict,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    subject = payload.get("subject", "").strip()
+    content = payload.get("content", "").strip()
+    if not subject or not content:
+        raise HTTPException(status_code=400, detail="Subject and content required")
+    ticket = SupportMessage(user_id=user.id, subject=subject)
+    db.add(ticket)
+    db.flush()
+    reply = SupportReply(ticket_id=ticket.id, user_id=user.id, content=content, is_admin=False)
+    db.add(reply)
+    db.commit()
+    db.refresh(ticket)
+
+    db.commit()
+    return {"id": ticket.id, "subject": ticket.subject, "status": ticket.status}
+
+
+@router.get("/support")
+def list_my_support_tickets(
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    tickets = db.query(SupportMessage).filter(SupportMessage.user_id == user.id).order_by(SupportMessage.updated_at.desc()).all()
+    return [{
+        "id": t.id, "subject": t.subject, "status": t.status,
+        "created_at": t.created_at.isoformat() if t.created_at else None,
+        "updated_at": t.updated_at.isoformat() if t.updated_at else None,
+        "reply_count": len(t.replies),
+    } for t in tickets]
+
+
+@router.get("/support/{ticket_id}")
+def get_support_ticket(
+    ticket_id: int,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    ticket = db.query(SupportMessage).filter(SupportMessage.id == ticket_id).first()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    is_admin = user.role == "admin"
+    if ticket.user_id != user.id and not is_admin:
+        raise HTTPException(status_code=403, detail="Access denied")
+    return {
+        "id": ticket.id, "subject": ticket.subject, "status": ticket.status,
+        "created_at": ticket.created_at.isoformat() if ticket.created_at else None,
+        "replies": [{
+            "id": r.id, "content": r.content, "is_admin": r.is_admin,
+            "username": r.user.username if r.user else "unknown",
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        } for r in ticket.replies],
+    }
+
+
+@router.post("/support/{ticket_id}/reply")
+def reply_support_ticket(
+    ticket_id: int,
+    payload: dict,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    ticket = db.query(SupportMessage).filter(SupportMessage.id == ticket_id).first()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    is_admin = user.role == "admin"
+    if ticket.user_id != user.id and not is_admin:
+        raise HTTPException(status_code=403, detail="Access denied")
+    content = payload.get("content", "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Content required")
+    reply = SupportReply(ticket_id=ticket.id, user_id=user.id, content=content, is_admin=is_admin)
+    db.add(reply)
+    ticket.status = "answered" if is_admin else "open"
+    ticket.updated_at = datetime.utcnow()
+    db.commit()
+    return {"detail": "Reply sent"}
+
+
+@router.get("/admin/support")
+def admin_list_support_tickets(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    tickets = db.query(SupportMessage).order_by(SupportMessage.updated_at.desc()).all()
+    return [{
+        "id": t.id, "subject": t.subject, "status": t.status,
+        "username": t.user.username if t.user else "unknown",
+        "content": t.replies[0].content if t.replies else "",
+        "created_at": t.created_at.isoformat() if t.created_at else None,
+        "updated_at": t.updated_at.isoformat() if t.updated_at else None,
+        "reply_count": len(t.replies),
+    } for t in tickets]
+
+
+@router.put("/admin/support/{ticket_id}/status")
+def admin_update_ticket_status(
+    ticket_id: int,
+    payload: dict,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    ticket = db.query(SupportMessage).filter(SupportMessage.id == ticket_id).first()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    ticket.status = payload.get("status", ticket.status)
+    db.commit()
+    return {"id": ticket.id, "status": ticket.status}
 
 
 @router.get("/{book_id}", response_model=BookOut)
@@ -783,16 +1043,16 @@ def get_book_text(
     return {"text": text, "title": book.title}
 
 
-def _enrich_characters(data: dict):
-    """Применить детекцию персонажей к структурированным данным."""
-    from fb2_to_vblite import find_speaker, determine_gender
-    for ch in data.get("chapters", []):
-        for p in ch.get("paragraphs", []):
-            text = p.get("text", "")
-            if text and p.get("character") is None:
-                char = find_speaker(text)
-                if char:
-                    p["character"] = {"name": char, "gender": determine_gender(char)}
+# def _enrich_characters(data: dict):
+#     """Применить детекцию персонажей к структурированным данным."""
+#     from fb2_to_vblite import find_speaker, determine_gender
+#     for ch in data.get("chapters", []):
+#         for p in ch.get("paragraphs", []):
+#             text = p.get("text", "")
+#             if text and p.get("character") is None:
+#                 char = find_speaker(text)
+#                 if char:
+#                     p["character"] = {"name": char, "gender": determine_gender(char)}
 
 
 @router.get("/{book_id}/structured")
@@ -829,7 +1089,6 @@ def get_book_structured(
                         images = get_book_images(file_path, book_id)
                         data["images"] = images
                     except: pass
-                    _enrich_characters(data)
                     return data
                 except Exception as e:
                     pass
@@ -843,7 +1102,6 @@ def get_book_structured(
                         images = extract_epub_images(file_path, cache_dir)
                         data["images"] = images
                     except: pass
-                    _enrich_characters(data)
                     return data
                 except Exception as e:
                     pass
@@ -858,7 +1116,6 @@ def get_book_structured(
                     images = get_book_images(file_path, book_id)
                     data["images"] = images
                 except: pass
-                _enrich_characters(data)
                 return data
         except: pass
     
@@ -873,7 +1130,6 @@ def get_book_structured(
                 images = get_book_images(file_path, book_id)
                 data["images"] = images
             except: pass
-            _enrich_characters(data)
             return data
         except: pass
 
@@ -890,7 +1146,6 @@ def get_book_structured(
                     images = extract_epub_images(book.file_path, cache_dir)
                     data["images"] = images
                 except: pass
-                _enrich_characters(data)
                 return data
         except Exception as e:
             pass
@@ -988,6 +1243,9 @@ def delete_book(
             os.remove(version.file_path)
         db.delete(version)
     
+    # Notify book subscribers
+    pass
+
     db.delete(book)
     db.commit()
     return {"detail": "Book deleted"}
@@ -1164,11 +1422,35 @@ def list_series(
 
 
 @router.get("/series/public")
-def list_public_series(db: Session = Depends(get_db)):
+def list_public_series(
+    db: Session = Depends(get_db),
+    whitelist: Optional[str] = Query(None),
+    blacklist: Optional[str] = Query(None),
+):
+    from database import book_series_association
+
+    # If genre filters active, find allowed series_ids first
+    allowed_series_ids = None
+    if whitelist or blacklist:
+        sq = db.query(book_series_association.c.series_id).join(
+            Book, Book.id == book_series_association.c.book_id
+        ).filter(Book.is_public == True).distinct()
+        if whitelist:
+            wl = [g.strip().lower() for g in whitelist.split(",") if g.strip()]
+            if wl:
+                sq = sq.filter(or_(*[Book.genres.ilike(f"%{g}%") for g in wl]))
+        if blacklist:
+            bl = [g.strip().lower() for g in blacklist.split(",") if g.strip()]
+            for g in bl:
+                sq = sq.filter(~Book.genres.ilike(f"%{g}%"))
+        allowed_series_ids = {row[0] for row in sq.all()}
+
     series_list = db.query(Series).order_by(func.lower(Series.name)).all()
     result = []
     seen_lower = set()
     for s in series_list:
+        if allowed_series_ids is not None and s.id not in allowed_series_ids:
+            continue
         lower_name = s.name.lower()
         if lower_name in seen_lower:
             continue
@@ -1586,6 +1868,11 @@ def update_metadata(
     if payload.description is not None:
         book.description = payload.description
     db.commit()
+
+    # Notify book subscribers about update
+    pass
+    db.commit()
+
     return {"id": book.id, "genres": book.genres, "description": book.description}
 
 
@@ -1622,6 +1909,7 @@ def create_comment(
     db: Session = Depends(get_db),
 ):
     content = payload.get("content", "").strip()
+    parent_id = payload.get("parent_id")
     if not content:
         raise HTTPException(status_code=400, detail="Content required")
     book = db.query(Book).filter(Book.id == book_id).first()
@@ -1629,10 +1917,12 @@ def create_comment(
         raise HTTPException(status_code=404, detail="Book not found")
     if book.owner_id != user.id and not book.is_public:
         raise HTTPException(status_code=403, detail="Cannot comment on private book")
-    comment = Comment(book_id=book_id, user_id=user.id, content=content)
+    comment = Comment(book_id=book_id, user_id=user.id, content=content, parent_id=parent_id)
     db.add(comment)
     db.commit()
     db.refresh(comment)
+
+    db.commit()
     return CommentOut(
         id=comment.id,
         user_id=comment.user_id,
@@ -1676,15 +1966,6 @@ def like_book(
     db.add(like)
     book.like_count = (book.like_count or 0) + 1
     db.commit()
-    if book.owner_id != user.id:
-        notif = Notification(
-            user_id=book.owner_id,
-            type="like",
-            message=f"Пользователь {user.username} оценил вашу книгу «{book.title}»",
-            link=f"/book/{book.id}"
-        )
-        db.add(notif)
-        db.commit()
     return {"liked": True}
 
 
@@ -1722,15 +2003,6 @@ def subscribe_to_book(
     db.add(sub)
     book.subscription_count = (book.subscription_count or 0) + 1
     db.commit()
-    if book.owner_id != user.id:
-        notif = Notification(
-            user_id=book.owner_id,
-            type="subscribe",
-            message=f"Пользователь {user.username} подписался на вашу книгу «{book.title}»",
-            link=f"/book/{book.id}"
-        )
-        db.add(notif)
-        db.commit()
     return {"subscribed": True}
 
 
@@ -1811,59 +2083,6 @@ def my_subscriptions(
             "book_count": book_count,
         })
     return result
-
-
-# Notifications
-@router.get("/notifications", response_model=List[NotificationOut])
-def get_notifications(
-    user: User = Depends(require_user),
-    db: Session = Depends(get_db),
-):
-    notifs = db.query(Notification).filter(Notification.user_id == user.id).order_by(Notification.created_at.desc()).all()
-    return [NotificationOut(
-        id=n.id,
-        type=n.type,
-        message=n.message,
-        link=n.link,
-        is_read=n.is_read,
-        created_at=n.created_at,
-    ) for n in notifs]
-
-
-@router.get("/notifications/unread-count")
-def unread_count(
-    user: User = Depends(require_user),
-    db: Session = Depends(get_db),
-):
-    count = db.query(Notification).filter(Notification.user_id == user.id, Notification.is_read == False).count()
-    return {"count": count}
-
-
-@router.post("/notifications/{notif_id}/read")
-def mark_read(
-    notif_id: int,
-    user: User = Depends(require_user),
-    db: Session = Depends(get_db),
-):
-    notif = db.query(Notification).filter(Notification.id == notif_id, Notification.user_id == user.id).first()
-    if not notif:
-        raise HTTPException(status_code=404, detail="Notification not found")
-    notif.is_read = True
-    db.commit()
-    return {"read": True}
-
-
-@router.post("/notifications/read-all")
-def mark_all_read(
-    user: User = Depends(require_user),
-    db: Session = Depends(get_db),
-):
-    db.query(Notification).filter(Notification.user_id == user.id, Notification.is_read == False).update({"is_read": True})
-    db.commit()
-    return {"read": True}
-
-
-# End of routes
 
 
 # User avatar
@@ -2145,3 +2364,4 @@ def admin_toggle_book_visibility(
     book.is_public = payload.get("is_public", not book.is_public)
     db.commit()
     return {"id": book.id, "is_public": book.is_public}
+

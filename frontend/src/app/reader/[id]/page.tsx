@@ -58,7 +58,7 @@ interface StructuredData {
   images?: Record<string, string>;
 }
 
-type ViewMode = "continuous" | "chapter";
+type ViewMode = "continuous" | "chapter" | "pages";
 
 /* ── constants ─────────────────────────────────────────────────────── */
 
@@ -79,7 +79,7 @@ const VOICE_TYPES = [
 ];
 
 const CHAPTER_RE =
-  /^(глава|chapter|часть|part|section|пролог|prologue|эпilogue|книга|book|interlude)\s*[.\d]*/i;
+  /^(глава|chapter|часть|part|section|пролог|prologue|эпилог|epilogue|интерлюдия|interlude|книга|book|interlude|вступление|введение|introduction)\s*[.\d]*/i;
 
 /* ── chapter detection from plain text ─────────────────────────────── */
 
@@ -173,6 +173,20 @@ export default function ReaderPage() {
   /* ── pagination state ── */
   const [viewMode, setViewMode] = useState<ViewMode>("continuous");
   const [currentChapter, setCurrentChapter] = useState(0);
+  const [currentPage, setCurrentPage] = useState(0);
+  const PARAGRAPHS_PER_PAGE = 15;
+
+const navBtnStyle = (enabled: boolean) => ({
+  padding: "6px 10px",
+  borderRadius: 8,
+  border: "1px solid var(--border)",
+  background: enabled ? "var(--bg-secondary)" : "var(--bg-tertiary)",
+  color: enabled ? "var(--text-primary)" : "var(--text-muted)",
+  fontSize: 14,
+  fontFamily: "Georgia, serif",
+  cursor: enabled ? "pointer" : "default",
+  opacity: enabled ? 1 : 0.5,
+});
 
 /* ── TTS state ── */
     const [ttsState, setTtsState] = useState<"idle" | "loading" | "playing" | "paused">("idle");
@@ -188,15 +202,22 @@ export default function ReaderPage() {
     type TtsQueueItem = { text: string; paraIdx: number; character?: string | { name?: string; }; voiceType: string; pitch: number; rate: number; volume: number };
     const ttsQueueRef = useRef<TtsQueueItem[]>([]);
     const ttsActiveRef = useRef(false);
+    const playGenRef = useRef(0);
 
    const contentRef = useRef<HTMLDivElement>(null);
+   const ttsAdvanceRef = useRef(false);
 
   /* ── derived ── */
 
   const chapters: Chapter[] = useMemo(() => {
-    if (structured) return structured.chapters;
-    if (plainText) return detectChapters(plainText);
-    return [];
+    let chs: Chapter[];
+    if (structured) chs = structured.chapters;
+    else if (plainText) chs = detectChapters(plainText);
+    else chs = [];
+    if (chs.length === 0) {
+      chs = [{ id: "ch-0", index: 0, title: "Обложка", paragraphs: [] }];
+    }
+    return chs;
   }, [structured, plainText]);
 
   const tocItems: TocItem[] = useMemo(() => {
@@ -204,32 +225,67 @@ export default function ReaderPage() {
     return chapters.map((ch) => ({ id: ch.id, title: ch.title, index: ch.index }));
   }, [structured, chapters]);
 
+  const pages = useMemo(() => {
+    const result: Array<{ chapterIdx: number; startPara: number; count: number }> = [];
+    for (let ci = 0; ci < chapters.length; ci++) {
+      const ch = chapters[ci];
+      const totalParas = ch.paragraphs.length;
+      for (let start = 0; start < totalParas; start += PARAGRAPHS_PER_PAGE) {
+        result.push({ chapterIdx: ci, startPara: start, count: Math.min(PARAGRAPHS_PER_PAGE, totalParas - start) });
+      }
+    }
+    return result;
+  }, [chapters]);
+
+  const totalPages = useMemo(() => pages.length, [pages]);
+
+  const currentChapterForPage = useMemo(() => {
+    if (viewMode !== "pages" || pages.length === 0) return 0;
+    const idx = Math.min(currentPage, pages.length - 1);
+    return pages[idx]?.chapterIdx ?? 0;
+  }, [viewMode, pages, currentPage]);
+
   const visibleParagraphs = useMemo(() => {
+    const chTitle = (ch: typeof chapters[0], ci: number) => ch.title || (ci === 0 ? "Обложка" : `Глава ${ci}`);
     if (viewMode === "continuous") {
-      return chapters.flatMap((ch) =>
+      return chapters.flatMap((ch, ci) =>
         ch.paragraphs.map((p) => ({
           ...p,
-          chapterTitle: ch.title,
+          chapterTitle: chTitle(ch, ci),
           chapterId: ch.id,
         }))
       );
+    }
+    if (viewMode === "pages") {
+      const page = pages[currentPage];
+      if (!page) return [];
+      const ch = chapters[page.chapterIdx];
+      const slice = ch.paragraphs.slice(page.startPara, page.startPara + page.count);
+      return slice.map(p => ({ ...p, chapterTitle: chTitle(ch, page.chapterIdx), chapterId: ch.id }));
     }
     const ch = chapters[currentChapter];
     if (!ch) return [];
     return ch.paragraphs.map((p) => ({
       ...p,
-      chapterTitle: ch.title,
+      chapterTitle: chTitle(ch, currentChapter),
       chapterId: ch.id,
     }));
-  }, [viewMode, chapters, currentChapter]);
+  }, [viewMode, chapters, currentChapter, currentPage, pages]);
 
   const currentChapterTitle = useMemo(() => {
     if (viewMode === "continuous") return null;
-    return chapters[currentChapter]?.title ?? null;
+    return chapters[currentChapter]?.title || (currentChapter === 0 ? "Обложка" : `Глава ${currentChapter}`);
   }, [viewMode, chapters, currentChapter]);
 
-  const canGoPrev = viewMode === "chapter" && currentChapter > 0;
-  const canGoNext = viewMode === "chapter" && currentChapter < chapters.length - 1;
+  const canGoPrev = viewMode === "chapter" && currentChapter > 0 ||
+    viewMode === "pages" && currentPage > 0;
+  const canGoNext = viewMode === "chapter" && currentChapter < chapters.length - 1 ||
+    viewMode === "pages" && currentPage < totalPages - 1;
+  const canGoPrevChapter = viewMode === "pages" && currentChapterForPage > 0;
+  const canGoNextChapter = viewMode === "pages" && currentChapterForPage < chapters.length - 1;
+  const canGoBeginning = viewMode === "pages" && currentPage > 0;
+  const canGoEnd = viewMode === "pages" && currentPage < totalPages - 1;
+  const isVbBook = structured?.format_version?.startsWith('vb') ?? false;
 
   /* ── effects ────────────────────────────────────────────────────── */
 
@@ -291,6 +347,32 @@ useEffect(() => {
      }
    }, [voiceType]);
 
+   /* ── TTS auto-advance in pages mode ── */
+   useEffect(() => {
+     if (!ttsAdvanceRef.current || viewMode !== "pages" || !ttsActiveRef.current) return;
+     ttsAdvanceRef.current = false;
+
+     const paras = visibleParagraphs.filter(p => p.text.length > 0);
+     if (paras.length === 0) { stopSpeaking(); return; }
+
+     playGenRef.current++;
+      ttsActiveRef.current = true;
+      const queue: typeof ttsQueueRef.current = [];
+      let lastChId: string | undefined;
+      for (let i = 0; i < paras.length; i++) {
+        const p = paras[i];
+        if (lastChId !== undefined && lastChId !== p.chapterId) {
+          queue.push({ text: `— ${p.chapterTitle} —`, paraIdx: i, character: undefined, voiceType, pitch, rate, volume });
+        }
+        lastChId = p.chapterId;
+        queue.push({ text: p.text, paraIdx: i, character: p.character || undefined, voiceType, pitch, rate, volume });
+      }
+      ttsQueueRef.current = queue;
+      setHighlightPara(-1);
+      setTtsState("idle");
+      playQueueItem();
+    }, [currentPage, currentChapter, totalPages]);
+
   /* ── data loading ───────────────────────────────────────────────── */
 
   const loadBook = async () => {
@@ -322,15 +404,39 @@ useEffect(() => {
   /* ── navigation ─────────────────────────────────────────────────── */
 
   const goToChapter = (idx: number) => {
-    setCurrentChapter(idx);
-    contentRef.current?.scrollTo({ top: 0, behavior: "smooth" });
     stopSpeaking();
+    if (viewMode === "pages") {
+      const targetChIdx = chapters.findIndex(ch => ch.index === idx);
+      if (targetChIdx >= 0) {
+        const firstPage = pages.findIndex(p => p.chapterIdx === targetChIdx);
+        if (firstPage >= 0) setCurrentPage(firstPage);
+      }
+      return;
+    }
+    const chIdx = chapters.findIndex(ch => ch.index === idx);
+    const targetIdx = chIdx >= 0 ? chIdx : idx;
+    setCurrentChapter(targetIdx);
+    setCurrentPage(0);
+    setTimeout(() => {
+      if (viewMode === "continuous") {
+        const ch = chapters[targetIdx];
+        if (ch && ch.paragraphs.length > 0) {
+          const el = document.getElementById(ch.paragraphs[0].id);
+          if (el) { el.scrollIntoView({ behavior: "smooth", block: "start" }); return; }
+        }
+      }
+      contentRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+    }, 50);
   };
 
   const goNext = () => {
     stopSpeaking();
     if (viewMode === "chapter" && currentChapter < chapters.length - 1) {
       goToChapter(currentChapter + 1);
+    }
+    if (viewMode === "pages" && currentPage < totalPages - 1) {
+      setCurrentPage(p => p + 1);
+      contentRef.current?.scrollTo({ top: 0, behavior: "instant" });
     }
   };
 
@@ -339,7 +445,29 @@ useEffect(() => {
     if (viewMode === "chapter" && currentChapter > 0) {
       goToChapter(currentChapter - 1);
     }
+    if (viewMode === "pages" && currentPage > 0) {
+      setCurrentPage(p => p - 1);
+      contentRef.current?.scrollTo({ top: 0, behavior: "instant" });
+    }
   };
+
+  const goPrevChapter = () => {
+    if (!canGoPrevChapter) return;
+    stopSpeaking();
+    const firstPage = pages.findIndex(p => p.chapterIdx === currentChapterForPage - 1);
+    if (firstPage >= 0) setCurrentPage(firstPage);
+  };
+
+  const goNextChapter = () => {
+    if (!canGoNextChapter) return;
+    stopSpeaking();
+    const firstPage = pages.findIndex(p => p.chapterIdx === currentChapterForPage + 1);
+    if (firstPage >= 0) setCurrentPage(firstPage);
+  };
+
+  const goBeginning = () => { stopSpeaking(); setCurrentPage(0); };
+
+  const goEnd = () => { stopSpeaking(); setCurrentPage(totalPages - 1); };
 
   /* ── TTS with edge-tts ─────────────────────────────────────────────── */
 
@@ -355,12 +483,24 @@ useEffect(() => {
   }, []);
 
   const playQueueItem = useCallback(async () => {
+    const gen = playGenRef.current;
     if (!ttsActiveRef.current || ttsQueueRef.current.length === 0) {
+      // ══ pages auto-advance ══
+      if (viewMode === "pages" && ttsActiveRef.current) {
+        if (currentPage < totalPages - 1) {
+          ttsAdvanceRef.current = true;
+          setCurrentPage(p => p + 1);
+          return;
+        }
+        stopSpeaking();
+        return;
+      }
       stopSpeaking();
       return;
     }
 
     const item = ttsQueueRef.current.shift()!;
+    if (gen !== playGenRef.current) return;
     setHighlightPara(item.paraIdx);
     setTtsState("loading");
 
@@ -377,38 +517,41 @@ try {
           item.rate,
           item.volume
         );
+      if (gen !== playGenRef.current) return;
       const url = URL.createObjectURL(blob);
       const audio = audioRef.current!;
       audio.src = url;
 
       audio.onended = () => {
         URL.revokeObjectURL(url);
+        if (gen !== playGenRef.current) return;
         playQueueItem();
       };
 
       audio.onerror = () => {
         URL.revokeObjectURL(url);
+        if (gen !== playGenRef.current) return;
         playQueueItem();
       };
 
       setTtsState("playing");
       await audio.play();
     } catch (err: any) {
+      if (err.name === 'AbortError' || err.name === 'NotAllowedError') {
+        playQueueItem();
+        return;
+      }
       console.error("TTS error:", err);
       setError(`TTS: ${err.message || err}`);
       stopSpeaking();
     }
-  }, [language, stopSpeaking]);
+  }, [language, stopSpeaking, viewMode, currentPage, currentChapter, totalPages, chapters.length]);
 
   const handleReadFromParagraph = useCallback(
     (paraIdx: number) => {
       if (ttsState === "playing" || ttsState === "loading") {
         stopSpeaking();
-        return;
-      }
-
-      if (ttsState === "paused" && audioRef.current) {
-        // Resume
+      } else if (ttsState === "paused" && audioRef.current) {
         audioRef.current.play();
         setTtsState("playing");
         return;
@@ -417,16 +560,25 @@ try {
 const paras = visibleParagraphs.slice(paraIdx).filter((p) => p.text.length > 0);
        if (paras.length === 0) return;
 
-       ttsActiveRef.current = true;
-        ttsQueueRef.current = paras.map((p, i) => ({
-          text: p.text,
-          paraIdx: paraIdx + i,
-          character: p.character || undefined,
-          voiceType: voiceType,
-          pitch: pitch,
-          rate: rate,
-          volume: volume,
-        }));
+        playGenRef.current++;
+        ttsActiveRef.current = true;
+        const queue: typeof ttsQueueRef.current = [];
+        let lastChId: string | undefined;
+        for (let i = 0; i < paras.length; i++) {
+          const p = paras[i];
+          if (lastChId !== undefined && lastChId !== p.chapterId) {
+            queue.push({
+              text: `— ${p.chapterTitle} —`, paraIdx: paraIdx + i,
+              character: undefined, voiceType, pitch, rate, volume,
+            });
+          }
+          lastChId = p.chapterId;
+          queue.push({
+            text: p.text, paraIdx: paraIdx + i,
+            character: p.character || undefined, voiceType, pitch, rate, volume,
+          });
+        }
+       ttsQueueRef.current = queue;
 
       playQueueItem();
     },
@@ -644,6 +796,13 @@ const paras = visibleParagraphs.slice(paraIdx).filter((p) => p.text.length > 0);
           >
             📖
           </button>
+          <button
+            style={viewMode === "pages" ? activeIconStyle : iconBtnStyle}
+            onClick={() => { stopSpeaking(); setViewMode("pages"); }}
+            title="По страницам"
+          >
+            📄
+          </button>
 
           <div style={{ width: 1, height: 20, background: "var(--border)", margin: "0 4px" }} />
 
@@ -699,7 +858,7 @@ const paras = visibleParagraphs.slice(paraIdx).filter((p) => p.text.length > 0);
             </div>
             <div style={{ flex: 1, overflowY: "auto", padding: "4px 0" }}>
               {tocItems.map((item) => {
-                const isActive = viewMode === "chapter" && currentChapter === item.index;
+                const isActive = viewMode !== "continuous" && currentChapter === chapters.findIndex(ch => ch.index === item.index);
                 return (
                   <button
                     key={item.id}
@@ -805,37 +964,30 @@ const paras = visibleParagraphs.slice(paraIdx).filter((p) => p.text.length > 0);
             )}
 
             {/* chapter title for non-continuous modes */}
-            {viewMode !== "continuous" && currentChapterTitle && (
-              <div
-                style={{
-                  marginBottom: 28,
-                  paddingBottom: 16,
-                  borderBottom: "2px solid var(--border)",
-                }}
-              >
-                <h2
-                  style={{
-                    fontSize: 24,
-                    fontWeight: 700,
-                    color: "var(--text-primary)",
-                    fontFamily: "Georgia, serif",
-                    lineHeight: 1.3,
-                  }}
-                >
-                  {currentChapterTitle}
+            {viewMode === "pages" ? (
+              <div style={{ marginBottom: 28, paddingBottom: 16, borderBottom: "2px solid var(--border)" }}>
+                <h2 style={{ fontSize: 28, fontWeight: 800, color: "var(--text-primary)", fontFamily: "Georgia, serif", lineHeight: 1.3, textAlign: "center" }}>
+                  {structured?.title || book?.title}
                 </h2>
-                <div
-                  style={{
-                    fontSize: 12,
-                    color: "var(--text-muted)",
-                    marginTop: 6,
-                    fontFamily: "Georgia, serif",
-                  }}
-                >
-                  {`Глава ${currentChapter + 1} из ${chapters.length}`}
+                <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6, fontFamily: "Georgia, serif", textAlign: "center" }}>
+                  Страница {currentPage + 1} из {totalPages}
                 </div>
               </div>
-            )}
+            ) : viewMode !== "continuous" && (currentChapterTitle || currentChapter === 0) ? (
+              <div style={{ marginBottom: 28, paddingBottom: 16, borderBottom: "2px solid var(--border)" }}>
+                <h2 style={{ fontSize: 28, fontWeight: 800, color: "var(--text-primary)", fontFamily: "Georgia, serif", lineHeight: 1.3, textAlign: "center" }}>
+                  {currentChapterTitle || structured?.title || book?.title}
+                </h2>
+                <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6, fontFamily: "Georgia, serif" }}>
+                  {`Глава ${currentChapter + 1} из ${chapters.length}`}
+                </div>
+                {currentChapter === 0 && structured?.author && structured.author !== "Unknown" && (
+                  <p style={{ textAlign: "center", color: "var(--text-secondary)", fontSize: 13, fontFamily: "Georgia, serif", marginTop: 8 }}>
+                    {structured.author}
+                  </p>
+                )}
+              </div>
+            ) : null}
 
             {/* paragraphs */}
             {visibleParagraphs.length === 0 ? (
@@ -854,83 +1006,108 @@ const paras = visibleParagraphs.slice(paraIdx).filter((p) => p.text.length > 0);
                 <div key={para.id} style={{ position: "relative", marginBottom: 4 }}>
                   {/* chapter divider in continuous mode */}
                   {viewMode === "continuous" &&
-                    idx > 0 &&
-                    para.chapterId !== visibleParagraphs[idx - 1]?.chapterId && (
+                    (idx === 0 || para.chapterId !== visibleParagraphs[idx - 1]?.chapterId) && (
                       <div
                         style={{
                           textAlign: "center",
-                          margin: "28px 0 20px",
-                          color: "var(--text-muted)",
-                          fontSize: 13,
+                          margin: "32px 0 24px",
+                          color: "var(--text-primary)",
+                          fontSize: 18,
                           display: "flex",
                           alignItems: "center",
-                          gap: 12,
+                          gap: 16,
                         }}
                       >
                         <div style={{ flex: 1, height: 1, background: "var(--border)" }} />
-                        <span style={{ fontWeight: 600, fontFamily: "Georgia, serif" }}>
+                        <span style={{ fontWeight: 700, fontFamily: "Georgia, serif", fontSize: 20 }}>
                           {para.chapterTitle}
                         </span>
                         <div style={{ flex: 1, height: 1, background: "var(--border)" }} />
                       </div>
                     )}
 
-                   <div
-                     onClick={() => {
-                       if (ttsState === "playing" || ttsState === "loading") { stopSpeaking(); return; }
-                       handleReadFromParagraph(idx);
-                     }}
-                     title="Нажмите чтобы начать чтение отсюда"
-                     style={{
-                       fontFamily: "Georgia, serif",
-                       fontSize: 17,
-                       lineHeight: 1.85,
-                       color: para.color || "var(--text-primary)",
-                       fontWeight: para.bold ? 700 : 400,
-                       fontStyle: para.italic ? "italic" : "normal",
-                       textIndent: (para.bold || para.character) ? 0 : "1.5em",
-                       margin: "0 0 0.6em",
-                       padding: "8px 12px",
-                       borderRadius: 6,
-                       background: highlightPara === idx ? "rgba(59,130,246,0.15)" : "transparent",
-                       borderLeft: highlightPara === idx ? "3px solid rgba(59,130,246,0.6)" : "3px solid transparent",
-                       cursor: "pointer",
-                       transition: "all 0.2s",
-                     }}
-                   >
-                        {showCharacterLabels && para.character && (
-                          <span style={{
-                            fontWeight: 600,
-                            color: (typeof para.character === 'object' && (para.character as any).name === 'действие')
-                              ? 'var(--text-muted)' : '#f59e0b',
-                            fontSize: "0.85em", marginRight: 6,
-                          }}>
-                            [{typeof para.character === 'string' ? para.character : (para.character as any).name}
-                            {showCharacterGender && typeof para.character === 'object' && (para.character as any).gender && (
-                              <> {(para.character as any).gender === 'female' ? 'Ж' : 'М'}</>
-                            )}]
-                          </span>
-                        )}
-                      {/* Embedded image in paragraph */}
-                      {(para as any).image && (
-                        <img
-                          src={`/api/books/${bookId}/image/${(para as any).image}`}
-                          alt=""
-                          style={{
-                            maxWidth: "100%",
-                            height: "auto",
-                            display: "block",
-                            margin: "8px 0",
-                            borderRadius: 8,
-                          }}
-                        />
-                      )}
-                      {para.text}
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: 4 }}>
+                      {isSpeaking && highlightPara === idx && (
+                       <>
+                         <button
+                           onClick={(e) => { e.stopPropagation(); handleReadFromParagraph(Math.max(0, idx - 1)); }}
+                           title="Предыдущий абзац"
+                           style={{
+                             background: "var(--bg-tertiary)", border: "1px solid var(--border)",
+                             cursor: "pointer", fontSize: 11, padding: "2px 6px", borderRadius: 4,
+                             color: "var(--text-secondary)", flexShrink: 0, marginTop: 8,
+                           }}
+                         >◀</button>
+                         <button
+                           onClick={(e) => { e.stopPropagation(); handleReadFromParagraph(idx + 1); }}
+                           title="Следующий абзац"
+                           style={{
+                             background: "var(--bg-tertiary)", border: "1px solid var(--border)",
+                             cursor: "pointer", fontSize: 11, padding: "2px 6px", borderRadius: 4,
+                             color: "var(--text-secondary)", flexShrink: 0, marginTop: 8,
+                           }}
+                         >▶</button>
+                       </>
+                     )}
+                     <div
+                       id={para.id}
+                       onClick={() => {
+                         if (ttsState === "playing" || ttsState === "loading") { stopSpeaking(); return; }
+                         handleReadFromParagraph(idx);
+                       }}
+                       title="Нажмите чтобы начать чтение отсюда"
+                       style={{
+                         fontFamily: "Georgia, serif",
+                         fontSize: 17,
+                         lineHeight: 1.85,
+                         color: para.color || "var(--text-primary)",
+                         fontWeight: para.bold ? 700 : 400,
+                         fontStyle: para.italic ? "italic" : "normal",
+                         textIndent: (para.bold || para.character) ? 0 : "1.5em",
+                         margin: "0 0 0.6em",
+                         padding: "8px 12px",
+                         borderRadius: 6,
+                         background: highlightPara === idx ? "rgba(59,130,246,0.15)" : "transparent",
+                         borderLeft: highlightPara === idx ? "3px solid rgba(59,130,246,0.6)" : "3px solid transparent",
+                         cursor: "pointer",
+                         transition: "all 0.2s",
+                         flex: 1,
+                       }}
+                     >
+                         {showCharacterLabels && para.character && (
+                           <span style={{
+                             fontWeight: 600,
+                             color: (typeof para.character === 'object' && (para.character as any).name === 'действие')
+                               ? 'var(--text-muted)' : '#f59e0b',
+                             fontSize: "0.85em", marginRight: 6,
+                           }}>
+                             [{typeof para.character === 'string' ? para.character : (para.character as any).name}
+                             {showCharacterGender && typeof para.character === 'object' && (para.character as any).gender && (
+                               <> {(para.character as any).gender === 'female' ? 'Ж' : 'М'}</>
+                             )}]
+                           </span>
+                         )}
+                       {/* Embedded image in paragraph */}
+                       {(para as any).image && (
+                         <img
+                           src={`/api/books/${bookId}/image/${(para as any).image}`}
+                           alt=""
+                           style={{
+                             maxWidth: "100%",
+                             height: "auto",
+                             display: "block",
+                             margin: "8px 0",
+                             borderRadius: 8,
+                           }}
+                         />
+                       )}
+                       {para.text}
+                      </div>
                     </div>
-                </div>
-              ))
-            )}
-
+                  </div>
+                ))
+              )}
+            
             {/* navigation */}
             {viewMode !== "continuous" && (
               <div
@@ -943,62 +1120,82 @@ const paras = visibleParagraphs.slice(paraIdx).filter((p) => p.text.length > 0);
                   borderTop: "1px solid var(--border)",
                 }}
               >
-                <button
-                  onClick={goPrev}
-                  disabled={!canGoPrev}
-                  style={{
-                    padding: "10px 20px",
-                    borderRadius: 10,
-                    border: "1px solid var(--border)",
-                    background: canGoPrev ? "var(--bg-secondary)" : "var(--bg-tertiary)",
-                    color: canGoPrev ? "var(--text-primary)" : "var(--text-muted)",
-                    fontSize: 14,
-                    fontFamily: "Georgia, serif",
-                    cursor: canGoPrev ? "pointer" : "default",
-                    opacity: canGoPrev ? 1 : 0.5,
-                  }}
-                >
-                  ← Назад
-                </button>
+                {viewMode === "pages" ? (
+                  <>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button onClick={goBeginning} disabled={!canGoBeginning} style={navBtnStyle(canGoBeginning)}>⏮</button>
+                      <button onClick={goPrevChapter} disabled={!canGoPrevChapter} style={navBtnStyle(canGoPrevChapter)}>⏪</button>
+                      <button onClick={goPrev} disabled={!canGoPrev} style={navBtnStyle(canGoPrev)}>◀</button>
+                    </div>
+                    <span style={{ fontSize: 13, color: "var(--text-muted)", fontFamily: "Georgia, serif" }}>
+                      {currentPage + 1} / {totalPages}
+                    </span>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button onClick={goNext} disabled={!canGoNext} style={navBtnStyle(canGoNext)}>▶</button>
+                      <button onClick={goNextChapter} disabled={!canGoNextChapter} style={navBtnStyle(canGoNextChapter)}>⏩</button>
+                      <button onClick={goEnd} disabled={!canGoEnd} style={navBtnStyle(canGoEnd)}>⏭</button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={goPrev}
+                      disabled={!canGoPrev}
+                      style={{
+                        padding: "10px 20px",
+                        borderRadius: 10,
+                        border: "1px solid var(--border)",
+                        background: canGoPrev ? "var(--bg-secondary)" : "var(--bg-tertiary)",
+                        color: canGoPrev ? "var(--text-primary)" : "var(--text-muted)",
+                        fontSize: 14,
+                        fontFamily: "Georgia, serif",
+                        cursor: canGoPrev ? "pointer" : "default",
+                        opacity: canGoPrev ? 1 : 0.5,
+                      }}
+                    >
+                      ← Назад
+                    </button>
 
-                <span style={{ fontSize: 13, color: "var(--text-muted)", fontFamily: "Georgia, serif" }}>
-                  {`${currentChapter + 1} / ${chapters.length}`}
-                </span>
+                    <span style={{ fontSize: 13, color: "var(--text-muted)", fontFamily: "Georgia, serif" }}>
+                      {currentChapter + 1} / {chapters.length}
+                    </span>
 
-                <button
-                  onClick={goNext}
-                  disabled={!canGoNext}
-                  style={{
-                    padding: "10px 20px",
-                    borderRadius: 10,
-                    border: "1px solid var(--border)",
-                    background: canGoNext ? "var(--bg-secondary)" : "var(--bg-tertiary)",
-                    color: canGoNext ? "var(--text-primary)" : "var(--text-muted)",
-                    fontSize: 14,
-                    fontFamily: "Georgia, serif",
-                    cursor: canGoNext ? "pointer" : "default",
-                    opacity: canGoNext ? 1 : 0.5,
-                  }}
-                >
-                  Далее →
-                </button>
+                    <button
+                      onClick={goNext}
+                      disabled={!canGoNext}
+                      style={{
+                        padding: "10px 20px",
+                        borderRadius: 10,
+                        border: "1px solid var(--border)",
+                        background: canGoNext ? "var(--bg-secondary)" : "var(--bg-tertiary)",
+                        color: canGoNext ? "var(--text-primary)" : "var(--text-muted)",
+                        fontSize: 14,
+                        fontFamily: "Georgia, serif",
+                        cursor: canGoNext ? "pointer" : "default",
+                        opacity: canGoNext ? 1 : 0.5,
+                      }}
+                    >
+                      Далее →
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
         </main>
 
         {/* ── right: settings ── */}
-        <aside
-          style={{
-            width: rightOpen ? 240 : 0,
-            overflow: "hidden",
-            transition: "width 0.2s",
-            background: "var(--sidebar-bg)",
-            borderLeft: rightOpen ? "1px solid var(--border)" : "none",
-            flexShrink: 0,
-          }}
-        >
-          <div style={{ width: 240, padding: 16 }}>
+         <aside
+           style={{
+             width: rightOpen ? 240 : 0,
+             overflow: rightOpen ? "hidden auto" : "hidden",
+             transition: "width 0.2s",
+             background: "var(--sidebar-bg)",
+             borderLeft: rightOpen ? "1px solid var(--border)" : "none",
+             flexShrink: 0,
+           }}
+         >
+           <div style={{ width: 240, padding: "16px 16px 32px" }}>
             <h2
               style={{
                 fontSize: 12,
@@ -1067,6 +1264,7 @@ const paras = visibleParagraphs.slice(paraIdx).filter((p) => p.text.length > 0);
                   [
                     ["continuous", "📜 Сплошной текст"],
                     ["chapter", "📖 По главам"],
+                    ["pages", "📄 По страницам"],
                   ] as const
                 ).map(([m, label]) => (
                   <button
@@ -1249,7 +1447,7 @@ const paras = visibleParagraphs.slice(paraIdx).filter((p) => p.text.length > 0);
             {/* character labels */}
             <div style={{ marginBottom: 20 }}>
               <label style={{ display: "block", fontSize: 12, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 6 }}>
-                Персонажи
+                Метки для формата (VB)
               </label>
               <button onClick={() => setShowCharacterLabels(!showCharacterLabels)} style={{
                 width: "100%", padding: "7px 0", borderRadius: 8,

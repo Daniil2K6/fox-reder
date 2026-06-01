@@ -46,6 +46,7 @@ class User(Base):
     likes = relationship("Like", back_populates="user", cascade="all, delete-orphan")
     subscriptions = relationship("Subscription", foreign_keys="Subscription.subscriber_id", back_populates="subscriber", cascade="all, delete-orphan")
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
+    support_tickets = relationship("SupportMessage", back_populates="user", cascade="all, delete-orphan")
 
 
 class Series(Base):
@@ -180,10 +181,39 @@ class Comment(Base):
      book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False)
      user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
      content = Column(Text, nullable=False)
+     parent_id = Column(Integer, ForeignKey("comments.id", ondelete="CASCADE"), nullable=True)
      created_at = Column(DateTime, default=datetime.utcnow)
 
      book = relationship("Book", back_populates="comments")
      user = relationship("User", back_populates="comments")
+
+
+class SupportMessage(Base):
+    __tablename__ = "support_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    subject = Column(String(256), nullable=False)
+    status = Column(String(16), default="open", nullable=False)  # open, answered, closed
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", back_populates="support_tickets")
+    replies = relationship("SupportReply", back_populates="ticket", cascade="all, delete-orphan", order_by="SupportReply.created_at")
+
+
+class SupportReply(Base):
+    __tablename__ = "support_replies"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ticket_id = Column(Integer, ForeignKey("support_messages.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    content = Column(Text, nullable=False)
+    is_admin = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    ticket = relationship("SupportMessage", back_populates="replies")
+    user = relationship("User")
 
 
 def init_db():
@@ -208,8 +238,26 @@ def init_db():
         "ALTER TABLE books ADD COLUMN subscription_count INTEGER DEFAULT 0",
         "ALTER TABLE books ADD COLUMN popularity_score INTEGER DEFAULT 0",
         "CREATE TABLE IF NOT EXISTS book_subscriptions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id), book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(user_id, book_id))",
-        # FTS for multilingual search
+         # FTS for multilingual search
         "CREATE VIRTUAL TABLE IF NOT EXISTS books_fts USING fts5(title, description, genres, original_language, content=books, content_rowid=id)",
+        # FTS5 triggers to keep index in sync
+        """CREATE TRIGGER IF NOT EXISTS books_fts_ai AFTER INSERT ON books BEGIN
+            INSERT INTO books_fts(rowid, title, description, genres, original_language)
+            VALUES (new.id, new.title, new.description, new.genres, new.original_language);
+        END""",
+        """CREATE TRIGGER IF NOT EXISTS books_fts_ad AFTER DELETE ON books BEGIN
+            INSERT INTO books_fts(books_fts, rowid, title, description, genres, original_language)
+            VALUES('delete', old.id, old.title, old.description, old.genres, old.original_language);
+        END""",
+        """CREATE TRIGGER IF NOT EXISTS books_fts_au AFTER UPDATE ON books BEGIN
+            INSERT INTO books_fts(books_fts, rowid, title, description, genres, original_language)
+            VALUES('delete', old.id, old.title, old.description, old.genres, old.original_language);
+            INSERT INTO books_fts(rowid, title, description, genres, original_language)
+            VALUES (new.id, new.title, new.description, new.genres, new.original_language);
+        END""",
+        "ALTER TABLE comments ADD COLUMN parent_id INTEGER REFERENCES comments(id) ON DELETE CASCADE",
+        "CREATE TABLE IF NOT EXISTS support_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id), subject VARCHAR(256) NOT NULL, status VARCHAR(16) DEFAULT 'open', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+        "CREATE TABLE IF NOT EXISTS support_replies (id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id INTEGER NOT NULL REFERENCES support_messages(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id), content TEXT NOT NULL, is_admin BOOLEAN DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
     ]
     with engine.connect() as conn:
         for sql in migrations:
@@ -227,6 +275,14 @@ def init_db():
                     logger.error(f"Error details: {e}")
                     raise RuntimeError(f"Database migration failed: {e}") from e
         conn.commit()
+
+    # Rebuild FTS index from existing data (idempotent, safe on empty DB)
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("INSERT INTO books_fts(books_fts) VALUES('rebuild')"))
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"FTS rebuild skipped: {e}")
 
 
 def get_db():

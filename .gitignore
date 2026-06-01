@@ -67,6 +67,9 @@ converter/models/
 # Converter build artifacts
 converter/llama.cpp/build/
 
+# Personal ideas / notes
+forum-idea.md
+
 # Build artifacts (TypeScript)
 frontend/tsconfig.tsbuildinfo
 

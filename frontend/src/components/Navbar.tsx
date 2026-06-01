@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { getUser, clearToken, clearUser, getTheme, setTheme, apiGetAvatarUrl, apiUnreadCount } from "@/lib/api";
+import { getUser, clearToken, clearUser, getTheme, setTheme, apiGetAvatarUrl } from "@/lib/api";
 
 interface Breadcrumb {
   label: string;
@@ -11,7 +11,7 @@ interface Breadcrumb {
 }
 
 interface NavbarProps {
-  activeTab?: "home" | "public" | "profile" | "admin" | "notifications" | "converter";
+  activeTab?: "home" | "public" | "profile" | "admin" | "converter" | "support";
   hideTabs?: boolean;
   breadcrumbs?: Breadcrumb[];
 }
@@ -20,7 +20,6 @@ export function Navbar({ activeTab, hideTabs, breadcrumbs }: NavbarProps) {
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
   const [theme, setThemeState] = useState("light");
-  const [unreadCount, setUnreadCount] = useState(0);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
 
   useEffect(() => {
@@ -29,9 +28,6 @@ export function Navbar({ activeTab, hideTabs, breadcrumbs }: NavbarProps) {
     const t = getTheme();
     setThemeState(t);
     document.documentElement.setAttribute("data-theme", t);
-    if (u) {
-      apiUnreadCount().then(d => setUnreadCount(d.count)).catch(() => {});
-    }
   }, []);
 
   useEffect(() => {
@@ -187,36 +183,18 @@ export function Navbar({ activeTab, hideTabs, breadcrumbs }: NavbarProps) {
         
         {user && user.username ? (
           <>
-            <Link href="/notifications" style={{ 
-              position: "relative", 
+            <Link href="/support" style={{ 
               padding: "6px 10px", 
               borderRadius: 8, 
-              border: "1px solid var(--border)", 
-              background: "transparent", 
-              color: "var(--text-secondary)", 
+              border: activeTab === "support" ? "1px solid var(--accent)" : "1px solid var(--border)", 
+              background: activeTab === "support" ? "var(--accent-light)" : "transparent", 
+              color: activeTab === "support" ? "var(--accent)" : "var(--text-secondary)", 
               textDecoration: "none", 
               fontSize: 14,
               display: "flex",
               alignItems: "center",
             }}>
-              🔔
-              {unreadCount > 0 && (
-                <span style={{ 
-                  position: "absolute", 
-                  top: -2, 
-                  right: -2, 
-                  background: "#ef4444", 
-                  color: "white", 
-                  borderRadius: "50%", 
-                  fontSize: 9, 
-                  minWidth: 16, 
-                  height: 16, 
-                  display: "flex", 
-                  alignItems: "center", 
-                  justifyContent: "center",
-                  fontWeight: 600,
-                }}>{unreadCount > 99 ? "99+" : unreadCount}</span>
-              )}
+              💬
             </Link>
             <Link href="/profile" style={{ 
               display: "flex", 

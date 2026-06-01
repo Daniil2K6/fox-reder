@@ -317,8 +317,12 @@ export async function apiListSeries(ownerId?: number) {
   return res.json();
 }
 
-export async function apiPublicSeries() {
-  const res = await request("/api/books/series/public");
+export async function apiPublicSeries(whitelist?: string[], blacklist?: string[]) {
+  const params = new URLSearchParams();
+  if (whitelist?.length) params.set("whitelist", whitelist.join(","));
+  if (blacklist?.length) params.set("blacklist", blacklist.join(","));
+  const qs = params.toString();
+  const res = await request(`/api/books/series/public${qs ? `?${qs}` : ""}`);
   return res.json();
 }
 
@@ -404,9 +408,14 @@ export async function apiTTSChunkWithCharacter(text: string, language: string = 
   return res.blob();
 }
 
-export async function apiPublicBooksCount(search?: string) {
+export async function apiPublicBooksCount(search?: string, whitelist?: string[], blacklist?: string[]) {
   let url = "/api/books/public/count";
-  if (search) url += `?search=${encodeURIComponent(search)}`;
+  const params = new URLSearchParams();
+  if (search) params.set("search", search);
+  if (whitelist && whitelist.length) params.set("whitelist", whitelist.join(","));
+  if (blacklist && blacklist.length) params.set("blacklist", blacklist.join(","));
+  const qs = params.toString();
+  if (qs) url += `?${qs}`;
   const res = await request(url);
   return res.json();
 }
@@ -418,16 +427,6 @@ export async function apiLikeBook(bookId: number) {
 
 export async function apiUnlikeBook(bookId: number) {
   const res = await request(`/api/books/${bookId}/like`, { method: "DELETE" });
-  return res.json();
-}
-
-export async function apiSubscribe(authorId: number) {
-  const res = await request(`/api/books/subscribe/${authorId}`, { method: "POST" });
-  return res.json();
-}
-
-export async function apiUnsubscribe(authorId: number) {
-  const res = await request(`/api/books/subscribe/${authorId}`, { method: "DELETE" });
   return res.json();
 }
 
@@ -443,6 +442,16 @@ export async function apiSubscribeBook(bookId: number) {
 
 export async function apiUnsubscribeBook(bookId: number) {
   const res = await request(`/api/books/${bookId}/subscribe`, { method: "DELETE" });
+  return res.json();
+}
+
+export async function apiSubscribe(authorId: number) {
+  const res = await request(`/api/books/subscribe/${authorId}`, { method: "POST" });
+  return res.json();
+}
+
+export async function apiUnsubscribe(authorId: number) {
+  const res = await request(`/api/books/subscribe/${authorId}`, { method: "DELETE" });
   return res.json();
 }
 
@@ -462,28 +471,12 @@ export async function apiUnifiedSearch(q: string, limit: number = 10) {
   return data.results || [];
 }
 
-export async function apiNotifications() {
-  const res = await request("/api/books/notifications");
-  return res.json();
-}
-
-export async function apiUnreadCount() {
-  const res = await request("/api/books/notifications/unread-count");
-  return res.json();
-}
-
-export async function apiMarkRead(notifId: number) {
-  const res = await request(`/api/books/notifications/${notifId}/read`, { method: "POST" });
-  return res.json();
-}
-
-export async function apiMarkAllRead() {
-  const res = await request("/api/books/notifications/read-all", { method: "POST" });
-  return res.json();
-}
-
-export async function apiAuthors() {
-  const res = await request("/api/books/users-with-books");
+export async function apiAuthors(whitelist?: string[], blacklist?: string[]) {
+  const params = new URLSearchParams();
+  if (whitelist?.length) params.set("whitelist", whitelist.join(","));
+  if (blacklist?.length) params.set("blacklist", blacklist.join(","));
+  const qs = params.toString();
+  const res = await request(`/api/books/users-with-books${qs ? `?${qs}` : ""}`);
   return res.json();
 }
 
@@ -506,43 +499,40 @@ export function apiGetAvatarUrl(userId: number): string {
   return `/api/books/user/avatar/${userId}`;
 }
 
-export async function apiPublicBooksPaginated(page: number = 1, limit: number = 20, search?: string, sortBy?: string, genre?: string, extension?: string, genreFilter?: { mode: string; whitelist: string[]; blacklist: string[] }) {
+export async function apiPublicBooksPaginated(
+  page: number = 1,
+  limit: number = 20,
+  search?: string,
+  sortBy?: string,
+  genre?: string,
+  extension?: string,
+  genreFilter?: { mode: string; whitelist: string[]; blacklist: string[] },
+  matchMode?: "strict" | "soft",
+  searchFields?: "title" | "description" | "all",
+) {
   let url = `/api/books/public?page=${page}&limit=${limit}`;
   if (search) url += `&search=${encodeURIComponent(search)}`;
   if (sortBy) url += `&sort_by=${sortBy}`;
   if (genre) url += `&genre=${encodeURIComponent(genre)}`;
   if (extension) url += `&extension=${encodeURIComponent(extension)}`;
-  const res = await request(url);
-  let data = await res.json();
-  if (genreFilter && genreFilter.mode !== "off") {
-    const whitelist = genreFilter.whitelist.map(g => g.toLowerCase());
-    const blacklist = genreFilter.blacklist.map(g => g.toLowerCase());
-    const hasGenre = (bookGenres: string | null, list: string[]) =>
-      list.length === 0 || (bookGenres && list.some(g => bookGenres.toLowerCase().includes(g)));
-    if (genreFilter.mode === "strict") {
-      data = data.filter((b: any) =>
-        (!whitelist.length || hasGenre(b.genres, whitelist)) &&
-        !hasGenre(b.genres, blacklist)
-      );
-    } else if (genreFilter.mode === "soft") {
-      data = data.sort((a: any, b: any) => {
-        const aHasWhitelist = hasGenre(a.genres, whitelist);
-        const bHasWhitelist = hasGenre(b.genres, whitelist);
-        const aHasBlacklist = hasGenre(a.genres, blacklist);
-        const bHasBlacklist = hasGenre(b.genres, blacklist);
-        if (aHasWhitelist && !bHasWhitelist) return -1;
-        if (!aHasWhitelist && bHasWhitelist) return 1;
-        if (aHasBlacklist && !bHasBlacklist) return 1;
-        if (!aHasBlacklist && bHasBlacklist) return -1;
-        return 0;
-      });
-    }
+  if (matchMode) url += `&match_mode=${matchMode}`;
+  if (searchFields) url += `&search_fields=${searchFields}`;
+  if (genreFilter && genreFilter.whitelist.length) {
+    url += `&whitelist=${encodeURIComponent(genreFilter.whitelist.join(","))}`;
   }
-  return data;
+  if (genreFilter && genreFilter.blacklist.length) {
+    url += `&blacklist=${encodeURIComponent(genreFilter.blacklist.join(","))}`;
+  }
+  const res = await request(url);
+  return res.json();
 }
 
-export async function apiHotBooks() {
-  const res = await request("/api/books/public/hot");
+export async function apiHotBooks(whitelist?: string[], blacklist?: string[]) {
+  const params = new URLSearchParams();
+  if (whitelist?.length) params.set("whitelist", whitelist.join(","));
+  if (blacklist?.length) params.set("blacklist", blacklist.join(","));
+  const qs = params.toString();
+  const res = await request(`/api/books/public/hot${qs ? `?${qs}` : ""}`);
   return res.json();
 }
 
@@ -646,6 +636,46 @@ export async function apiAdminToggleBookVisibility(bookId: number, isPublic: boo
   const res = await request(`/api/books/admin/book/${bookId}/visibility`, {
     method: "PUT",
     body: JSON.stringify({ is_public: isPublic }),
+  });
+  return res.json();
+}
+
+// Support tickets
+export async function apiCreateSupportTicket(subject: string, content: string) {
+  const res = await request("/api/books/support", {
+    method: "POST",
+    body: JSON.stringify({ subject, content }),
+  });
+  return res.json();
+}
+
+export async function apiMySupportTickets() {
+  const res = await request("/api/books/support");
+  return res.json();
+}
+
+export async function apiSupportTicket(ticketId: number) {
+  const res = await request(`/api/books/support/${ticketId}`);
+  return res.json();
+}
+
+export async function apiReplySupportTicket(ticketId: number, content: string) {
+  const res = await request(`/api/books/support/${ticketId}/reply`, {
+    method: "POST",
+    body: JSON.stringify({ content }),
+  });
+  return res.json();
+}
+
+export async function apiAdminSupportTickets() {
+  const res = await request("/api/books/admin/support");
+  return res.json();
+}
+
+export async function apiAdminUpdateTicketStatus(ticketId: number, status: string) {
+  const res = await request(`/api/books/admin/support/${ticketId}/status`, {
+    method: "PUT",
+    body: JSON.stringify({ status }),
   });
   return res.json();
 }
