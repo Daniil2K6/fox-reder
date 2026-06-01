@@ -42,7 +42,7 @@ export function Navbar({ activeTab, hideTabs, breadcrumbs }: NavbarProps) {
   const logout = () => {
     clearToken();
     clearUser();
-    router.push("/");
+    window.location.href = "/";
   };
 
   const toggleTheme = () => {

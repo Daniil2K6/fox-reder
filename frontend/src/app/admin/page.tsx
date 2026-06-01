@@ -91,7 +91,7 @@ export default function AdminPage() {
   const logout = () => {
     clearToken();
     clearUser();
-    router.push("/");
+    window.location.href = "/";
   };
 
   const toggleTheme = () => {

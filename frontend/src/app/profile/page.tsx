@@ -580,7 +580,7 @@ export default function ProfilePage() {
     }
   };
 
-  const logout = () => { clearToken(); clearUser(); router.push("/"); };
+  const logout = () => { clearToken(); clearUser(); window.location.href = "/"; };
   const toggleTheme = () => { const n = theme === "light" ? "dark" : "light"; setTheme(n); setThemeState(n); };
 
   const handleOpenLocal = () => {
